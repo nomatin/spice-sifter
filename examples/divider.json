@@ -1,0 +1,12 @@
+{
+  "name": "voltage_divider",
+  "spice": "* Voltage divider\nV1 in 0 DC 5\nR1 in out 10k\nR2 out 0 10k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "min": 2.49,
+      "max": 2.51
+    }
+  ]
+}
