@@ -1,0 +1,44 @@
+{
+  "name": "sweep_transient_rc",
+  "spice": "* RC step sweep\nV1 in 0 PULSE(0 1 0 1n 1n 1 2)\nR1 in out {{R}}\nC1 out 0 1u\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "sweep": {
+    "parameters": {
+      "R": {
+        "values": [
+          1000,
+          2000
+        ]
+      }
+    }
+  },
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "R": 1000
+      },
+      "min": 0.6271205588285577,
+      "max": 0.6371205588285577
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "R": 2000
+      },
+      "min": 0.38846934028736657,
+      "max": 0.3984693402873666
+    }
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "charge",
+        "type": "signal",
+        "signal": "v(out)",
+        "max_points": 100
+      }
+    ]
+  }
+}

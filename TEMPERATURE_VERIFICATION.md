@@ -1,5 +1,7 @@
 # DBUR Test 0.3 — Temperature Testing
 
+Отчёт этапа 0.3. Parameter Sweep и поддержка OP, добавленные в 0.4, описаны в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md).
+
 ## Среда и способ задания температуры
 
 Windows, Python 3.14.5, Altium Designer 24.4.1.13. Проверено 30 октября 2026 года на самостоятельных NSX через прежний DelphiScript Runner, без проектов, Dashboard Temperature Sweep и эмуляции ввода.

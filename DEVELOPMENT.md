@@ -1,6 +1,6 @@
-# Устройство DBUR Test 0.3
+# Устройство DBUR Test 0.4
 
-Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [README.md](README.md). Результаты версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
+Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [README.md](README.md). Результаты версии 0.4 — в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md), версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
 
 ## Поток данных
 
@@ -55,3 +55,12 @@
 В Altium 24.4 подтверждена альтернатива `.OPTIONS TEMP`, поскольку прямая `.TEMP` не изменила параметры контрольного диода. Подстановка выполняется в generate_nsx после валидации внешнего `.TEMP`. TNOM и файлы моделей не меняются. Варианты серии добавляют температурную директиву сразу после заголовка, вне вложенных блоков.
 
 Графики помещаются в runs[i].graphs; результаты с ошибками не уничтожают остальные элементы runs. Блокировка и pending-run.txt остаются общими; тайм-аут не приводит к принудительному завершению Altium. Подробнее: TEMPERATURE_VERIFICATION.md.
+
+
+## Parameter Sweep 0.4
+
+parameter_axes разбирает список или компактное описание линейной оси. sweep_plan вычисляет полное произведение с температурами, проверяет max_runs, when, плейсхолдеры и подготовленные схемы до первого процесса Altium. Десятичная арифметика исключает накопление ошибки шага; огромные линейные сетки не разворачиваются до проверки лимита.
+
+execute_sweep перебирает температуры и декартово произведение индексов, подставляет выбранные Decimal-значения, фильтрует проверки/графики и вызывает прежний execute_one. Контекст параметров связывается с run_id вне SDF-парсера. execute_one сохраняет старую структуру ответов при отсутствии sweep; отдельная температурная серия также не меняется.
+
+require_running_altium дополнительно читает Responding основного процесса: неотвечающий Altium даёт BUSY. Это чтение состояния процесса, без управления интерфейсом. Подробности и реальная приёмка — SWEEP_VERIFICATION.md.

@@ -1,5 +1,5 @@
 """DBUR Test: input preparation and independent result validation.
-Temperature series, AC impedance, transient/DC checks and numeric graph export.
+Parameter/temperature series, AC impedance, transient/DC/OP checks and numeric graph export.
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
@@ -15,7 +15,7 @@ class TestError(Exception):
         self.code, self.message = code, message
         super().__init__(message)
 
-def load_test(path):
+def load_test(path,max_runs=100):
     try:
         data = json.loads(Path(path).read_text(encoding='utf-8-sig'), parse_constant=lambda x: (_ for _ in ()).throw(ValueError('Nonstandard JSON number: '+x)))
         if not isinstance(data, dict):
@@ -24,7 +24,7 @@ def load_test(path):
             if not isinstance(data.get(key), str) or not data[key].strip():
                 raise ValueError(f'{key} must be a nonempty string')
         plan=temperature_plan(data)
-        if not isinstance(data.get('checks'), list) or (not data['checks'] and plan is None):
+        if not isinstance(data.get('checks'), list) or (not data['checks'] and plan is None and 'sweep' not in data):
             raise ValueError('checks must be a nonempty array')
         for c in data['checks']:
             if not isinstance(c, dict):
@@ -34,7 +34,7 @@ def load_test(path):
             else:
                 if not isinstance(c.get('signal'), str) or not c['signal'].strip():
                     raise ValueError('Invalid signal')
-                if c.get('analysis') not in (None, 'tran', 'dc'):
+                if c.get('analysis') not in (None, 'tran', 'dc', 'op'):
                     raise ValueError('Unsupported analysis')
                 if c.get('measurement') not in ('first', 'last', 'min', 'max'):
                     raise ValueError('Unsupported measurement')
@@ -52,6 +52,7 @@ def load_test(path):
             if not (Path(path).resolve().parent / model).is_file():
                 raise ValueError(f'Model not found: {model}')
         validate_graph_requests(data.get('output', {}))
+        sweep_plan(data,max_runs,Path(path).resolve().parent)
         generate_nsx(data, Path(path).resolve().parent)
         return data
     except (ValueError, OSError, TypeError) as e:
@@ -74,8 +75,8 @@ def model_path(path):
 
 def generate_nsx(data, base):
     lines = data['spice'].splitlines()
-    if not re.search(r'^\s*\.(TRAN|AC|DC)\b', '\n'.join(lines[1:]), re.I | re.M):
-        raise ValueError('Requires .TRAN, .AC or .DC after the title line; .OP is unverified')
+    if not re.search(r'^\s*\.(TRAN|AC|DC|OP)\b', '\n'.join(lines[1:]), re.I | re.M):
+        raise ValueError('Requires .TRAN, .AC, .DC or .OP after the title line')
     ends = [i for i, line in enumerate(lines) if re.fullmatch(r'\s*\.END\s*', line, re.I)]
     if len(ends) > 1 or (ends and any(s.strip() and not s.lstrip().startswith('*') for s in lines[ends[0]+1:])):
         raise ValueError('Invalid .END position')
@@ -148,7 +149,7 @@ def validate_graph_requests(output):
             if r.get('analysis','ac')!='ac':raise ValueError('Impedance requires AC')
         elif r.get('type')=='signal':
             if not isinstance(r.get('signal'),str) or not r['signal'].strip():raise ValueError('Graph signal required')
-            if r.get('analysis') not in (None,'ac','tran','dc'):raise ValueError('Invalid graph analysis')
+            if r.get('analysis') not in (None,'ac','tran','dc','op'):raise ValueError('Invalid graph analysis')
         else:raise ValueError('Unknown graph type')
         cs=r.get('components',['real'])
         if not isinstance(cs,list) or not cs or any(c not in COMPONENTS for c in cs) or len(cs)!=len(set(cs)):
@@ -159,7 +160,7 @@ def validate_graph_requests(output):
 
 
 def chart_analysis(chart):
-    return {'transient analysis':'tran','ac analysis':'ac','dc sweep':'dc'}.get(chart.name.casefold())
+    return {'transient analysis':'tran','ac analysis':'ac','dc sweep':'dc','operating point':'op'}.get(chart.name.casefold())
 
 
 def select_chart(doc, analysis, signals):
@@ -289,7 +290,7 @@ def export_graphs(doc,requests):
         if n!=len(values) or n==0:raise TestError('GRAPH_EXPORT_ERROR','Invalid waveform length')
         limit=min(n,r.get('max_points',n))
         indices=list(range(n)) if limit==n else [j*(n-1)//(limit-1) for j in range(limit)]
-        xunit='Hz' if analysis=='ac' else 's'
+        xunit='Hz' if analysis=='ac' else ('1' if analysis=='op' else 's')
         if analysis=='dc':
             units={w.unit for w in chart.waves if w.x==w.y and w.x==x and w.unit}
             if len(units)!=1:raise TestError('GRAPH_EXPORT_ERROR','Cannot determine DC sweep units unambiguously')
@@ -444,7 +445,7 @@ def pas_string(value):
 def require_running_altium(exe):
     """Require the selected installation, excluding transient -R launchers."""
     command = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter \"name='X2.EXE'\" "
-               "-ErrorAction Stop | Select-Object ExecutablePath,CommandLine | ConvertTo-Json -Compress")
+               "-ErrorAction Stop | Select-Object ExecutablePath,CommandLine,@{Name='Responding';Expression={(Get-Process -Id $_.ProcessId -ErrorAction Stop).Responding}} | ConvertTo-Json -Compress")
     try:
         result = subprocess.run(
             ['powershell', '-NoProfile', '-Command', command],
@@ -460,6 +461,8 @@ def require_running_altium(exe):
             command_line = process.get('CommandLine') or ''
             if (path and os.path.normcase(os.path.abspath(path)) == expected
                     and not re.search(r'(?:^|[\s"])\-R', command_line, re.I)):
+                if process.get('Responding') is False:
+                    raise TestError('BUSY','Selected Altium process is not responding')
                 return
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         raise TestError('ALTIUM_STATE_UNKNOWN', 'Cannot verify running Altium: '+str(e)) from e
@@ -499,7 +502,7 @@ def run_altium(exe, data, base, timeout, keep, report, verbose=False):
         guard.unlink()
     work = root / uuid.uuid4().hex
     work.mkdir()
-    if 'temperature_c' in report:report['run_id']=work.name
+    if 'temperature_c' in report or 'parameters' in report:report['run_id']=work.name
     success = False
     timed_out = False
     try:
@@ -587,7 +590,7 @@ end;
                     if result.resolve() != expected.resolve() or not result.is_file():
                         raise TestError('SDF_NOT_SAVED','Expected current-run SDF was not saved')
                     doc=parse_sdf(result)
-                    if 'temperature_c' in report:report['simulation_status']='PASS'
+                    if 'temperature_c' in report or 'parameters' in report:report['simulation_status']='PASS'
                     outcome,rows=validate_document(doc,data['checks'])
                     report['checks']=rows
                     if data.get('output',{}).get('graphs'):
@@ -676,29 +679,37 @@ def temperature_plan(data):
 def error_payload(error):
     payload=dict(code=error.code,message=error.message)
     if hasattr(error,'temperature_code'):payload['temperature_code']=error.temperature_code
+    if hasattr(error,'sweep_code'):payload['sweep_code']=error.sweep_code
     return payload
 
 
-def execute_one(exe,data,base,timeout,keep,verbose,temperature=None):
+def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=None):
     report=dict(status='ERROR',checks=[],error=None)
+    if parameters is not None:
+        report.update(parameters=parameters,run_id=uuid.uuid4().hex,simulation_status='ERROR',checks_count=0,checks_status='NOT_RUN')
     if temperature is not None:
         report.update(temperature_c=temperature,temperature_method='OPTIONS TEMP',simulation_status='ERROR',checks_count=0,checks_status='NOT_RUN')
     try:
-        if temperature is not None:require_running_altium(exe)
+        if temperature is not None or parameters is not None:require_running_altium(exe)
         report['status'],report['checks']=run_altium(exe,data,base,timeout,keep,report,verbose)
         if report['status']=='ERROR':report['error']=next(r['error'] for r in report['checks'] if 'error' in r)
     except TestError as e:report['error']=error_payload(e)
     except (OSError,ValueError,subprocess.TimeoutExpired) as e:
         report['error']=dict(code='SIM_NOT_RUN',message=str(e))
-    if temperature is not None:
+    if temperature is not None or parameters is not None:
         report['checks_count']=len(report['checks'])
         report['checks_status']=('NOT_CONFIGURED' if not data['checks'] else ('NOT_RUN' if not report['checks'] else ('ERROR' if any('error' in c for c in report['checks']) else ('PASS' if all(c['passed'] for c in report['checks']) else 'FAIL'))))
-        if report['error']:report['error'].setdefault('temperature_code','TEMP_RESULT_MISSING' if report['error']['code'] in ('SDF_NOT_SAVED','SDF_PARSE_ERROR') else 'TEMP_RUN_FAILED')
-        for graph in report.get('graphs',[]):graph['temperature_c']=temperature
+        if temperature is not None and report['error']:report['error'].setdefault('temperature_code','TEMP_RESULT_MISSING' if report['error']['code'] in ('SDF_NOT_SAVED','SDF_PARSE_ERROR') else 'TEMP_RUN_FAILED')
+        for graph in report.get('graphs',[]):
+            if temperature is not None:graph['temperature_c']=temperature
+            if parameters is not None:graph.update(run_id=report['run_id'],parameters=parameters)
+        if parameters is not None and report['error']:report['error'].setdefault('sweep_code','SWEEP_RESULT_MISSING' if report['error']['code'] in ('SDF_NOT_SAVED','SDF_PARSE_ERROR') else 'SWEEP_RUN_FAILED')
     return report
 
 
-def execute_test(exe,data,base,timeout,keep,verbose,report):
+def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
+    if 'sweep' in data:
+        return execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs)
     plan=temperature_plan(data)
     if 'temperatures_c' not in data:
         report.update(execute_one(exe,data,base,timeout,keep,verbose,plan[0] if plan else None))
@@ -720,6 +731,156 @@ def execute_test(exe,data,base,timeout,keep,verbose,report):
     report['error']=next((r['error'] for r in runs if r['error']),None)
 
 
+from decimal import Decimal, localcontext
+from itertools import product
+
+
+class SweepInputError(TestError):
+    def __init__(self,reason,message):
+        super().__init__('INPUT_INVALID',message)
+        self.sweep_code=reason
+
+
+def sweep_number(value):
+    try:valid=finite_number(value)
+    except OverflowError:valid=False
+    if not valid:
+        raise SweepInputError('SWEEP_INVALID','Sweep values must be finite numbers, not text or booleans')
+    return Decimal(str(value))
+
+
+def parameter_axes(data):
+    placeholders=re.findall(r'\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}',data['spice'])
+    if 'sweep' not in data:
+        if '{{' in data['spice'] or '}}' in data['spice']:
+            raise SweepInputError('SWEEP_PLACEHOLDER_MISSING','Unresolved parameter placeholder without sweep')
+        axes={}
+    else:
+        sweep=data['sweep']
+        if not isinstance(sweep,dict) or set(sweep)!={'parameters'} or not isinstance(sweep['parameters'],dict):
+            raise SweepInputError('SWEEP_INVALID','sweep must contain a parameters object')
+        if not sweep['parameters']:raise SweepInputError('SWEEP_EMPTY','No sweep parameters')
+        axes={}
+        for name,spec in sweep['parameters'].items():
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',name) or not isinstance(spec,dict):
+                raise SweepInputError('SWEEP_INVALID','Invalid parameter name or definition')
+            if name not in placeholders:raise SweepInputError('SWEEP_PARAMETER_UNUSED','Parameter is unused: '+name)
+            if set(spec)=={'values'}:
+                if not isinstance(spec['values'],list) or not spec['values']:
+                    raise SweepInputError('SWEEP_EMPTY','Empty values for '+name)
+                values=[sweep_number(v) for v in spec['values']]
+                if len(set(values))!=len(values):raise SweepInputError('SWEEP_DUPLICATE_VALUE','Duplicate values for '+name)
+                axes[name]=dict(values=values,count=len(values))
+            elif set(spec)=={'start','stop','step'}:
+                start,stop,step=(sweep_number(spec[k]) for k in ('start','stop','step'))
+                if step==0 or (stop-start)*step<0:
+                    raise SweepInputError('SWEEP_INVALID_RANGE','Zero step or wrong direction for '+name)
+                with localcontext() as ctx:
+                    ctx.prec=1000
+                    count=int((stop-start)/step)+1
+                axes[name]=dict(start=start,step=step,count=count)
+            else:raise SweepInputError('SWEEP_INVALID_RANGE','Use values or start/stop/step, exclusively: '+name)
+        unknown=set(placeholders)-set(axes)
+        residual=re.sub(r'\{\{[A-Za-z_][A-Za-z0-9_]*\}\}','',data['spice'])
+        if unknown or '{{' in residual or '}}' in residual:
+            raise SweepInputError('SWEEP_PLACEHOLDER_MISSING','Unknown or malformed placeholders: '+', '.join(sorted(unknown)))
+    return axes
+
+
+def axis_value(axis,index):
+    if 'values' in axis:return axis['values'][index]
+    with localcontext() as ctx:
+        ctx.prec=1000
+        return axis['start']+index*axis['step']
+
+
+def condition_indices(condition,axes):
+    if not isinstance(condition,dict):raise SweepInputError('SWEEP_CHECK_INVALID','when must be an object')
+    result={}
+    for name,value in condition.items():
+        if name not in axes:raise SweepInputError('SWEEP_CHECK_INVALID','Unknown parameter in when: '+name)
+        try:target=sweep_number(value)
+        except SweepInputError as e:raise SweepInputError('SWEEP_CHECK_INVALID',e.message) from e
+        axis=axes[name]
+        if 'values' in axis:candidates=range(axis['count'])
+        else:
+            with localcontext() as ctx:
+                ctx.prec=1000
+                near=int((target-axis['start'])/axis['step'])
+            candidates=[j for j in (near-1,near,near+1) if 0<=j<axis['count']]
+        exact=[j for j in candidates if axis_value(axis,j)==target]
+        if exact:result[name]=exact[0];continue
+        close=[j for j in candidates if math.isclose(float(axis_value(axis,j)),float(target),rel_tol=1e-12,abs_tol=0)]
+        if len(close)!=1:raise SweepInputError('SWEEP_CHECK_INVALID','when value absent or ambiguous for '+name)
+        result[name]=close[0]
+    return result
+
+
+def sweep_plan(data,max_runs=100,base=None):
+    axes=parameter_axes(data)
+    temps=temperature_plan(data)
+    total=math.prod(a['count'] for a in axes.values())*(len(temps) if 'temperatures_c' in data else 1)
+    if isinstance(max_runs,bool) or not isinstance(max_runs,int) or max_runs<1:
+        raise SweepInputError('SWEEP_INVALID','max-runs must be a positive integer')
+    if 'sweep' in data and total>max_runs:
+        raise SweepInputError('SWEEP_TOO_MANY_RUNS',f'Sweep requires {total} runs; limit is {max_runs}')
+    for request in data.get('checks',[]):
+        if isinstance(request,dict) and 'when' in request:condition_indices(request['when'],axes)
+    output=data.get('output',{})
+    if isinstance(output,dict) and isinstance(output.get('graphs',[]),list):
+        for request in output.get('graphs',[]):
+            if isinstance(request,dict) and 'when' in request:condition_indices(request['when'],axes)
+    # Validate every rendered scheme before any simulator invocation. The run cap bounds this work.
+    if 'sweep' in data:
+        for name,axis in axes.items():
+            floats=[float(axis_value(axis,j)) for j in range(axis['count'])]
+            if any(not math.isfinite(v) for v in floats) or len(set(floats))!=len(floats):
+                raise SweepInputError('SWEEP_DUPLICATE_VALUE','Grid cannot be represented distinctly as SPICE numbers: '+name)
+        for indices in product(*(range(a['count']) for a in axes.values())):
+            parameters={n:axis_value(a,j) for (n,a),j in zip(axes.items(),indices)}
+            variant=dict(data,spice=render_parameters(data['spice'],parameters))
+            variant.pop('sweep')
+            generate_nsx(variant,base or Path('.'))
+    return axes,total
+
+
+def render_parameters(spice,parameters):
+    rendered=re.sub(r'\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}',lambda m:str(parameters[m[1]]),spice)
+    if '{{' in rendered or '}}' in rendered:raise SweepInputError('SWEEP_PLACEHOLDER_MISSING','Unresolved placeholder')
+    return rendered
+
+
+def execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs):
+    axes,total=sweep_plan(data,max_runs,base)
+    temperatures=temperature_plan(data) or [None]
+    runs=[];stopped=False
+    for t in temperatures:
+        for combo in product(*(range(a['count']) for a in axes.values())):
+            if stopped:break
+            indices=dict(zip(axes,combo))
+            decimals={n:axis_value(axes[n],j) for n,j in indices.items()}
+            parameters={n:float(v) for n,v in decimals.items()}
+            def applies(request):
+                return all(indices[n]==j for n,j in condition_indices(request.get('when',{}),axes).items())
+            variant=dict(data,spice=render_parameters(data['spice'],decimals))
+            variant.pop('sweep');variant.pop('temperatures_c',None)
+            if 'temperatures_c' in data:
+                lines=variant['spice'].splitlines();lines.insert(1,'.TEMP '+str(t));variant['spice']='\n'.join(lines)
+            variant['checks']=[{k:v for k,v in c.items() if k!='when'} for c in data['checks'] if applies(c) and ('temperature_c' not in c or c['temperature_c']==t)]
+            if 'output' in data:
+                variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k not in ('when','temperatures_c')} for g in data['output'].get('graphs',[]) if applies(g) and ('temperatures_c' not in g or t in g['temperatures_c'])])
+            run=execute_one(exe,variant,base,timeout,keep,verbose,t,parameters)
+            runs.append(run)
+            if run['error'] and run['error']['code'] in ('TIMEOUT','SCRIPT_NOT_EXECUTED','BUSY','ALTIUM_NOT_RUNNING','ALTIUM_STATE_UNKNOWN'):
+                stopped=True
+        if stopped:break
+    report.pop('checks',None);report['runs']=runs
+    report['summary']=dict(total=total,passed=sum(r['status']=='PASS' for r in runs),failed=sum(r['status']=='FAIL' for r in runs),errors=sum(r['status']=='ERROR' for r in runs))
+    if stopped:report['summary'].update(completed=len(runs),not_run=total-len(runs))
+    report['status']='ERROR' if report['summary']['errors'] else ('FAIL' if report['summary']['failed'] else 'PASS')
+    report['error']=next((r['error'] for r in runs if r['error']),None)
+
+
 class JSONArgumentParser(argparse.ArgumentParser):
     def error(self, message):
         raise TestError('INPUT_INVALID',message)
@@ -731,10 +892,11 @@ def main():
     p.add_argument('--timeout', type=float, default=120)
     p.add_argument('--keep-files', action='store_true')
     p.add_argument('--verbose', action='store_true')
+    p.add_argument('--max-runs',type=int,default=100)
     report = dict(status='ERROR', test=None, simulator='Altium MixedSim', checks=[], error=None)
     try:
         args = p.parse_args()
-        data = load_test(args.test)
+        data = load_test(args.test,args.max_runs)
         report['test'] = data['name']
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise TestError('INPUT_INVALID', 'timeout must be positive and finite')
@@ -747,7 +909,7 @@ def main():
         if not args.altium or not Path(args.altium).is_file():
             raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or DBUR_ALTIUM to X2.EXE')
         require_running_altium(args.altium)
-        execute_test(args.altium,data,Path(args.test).resolve().parent,args.timeout,args.keep_files,args.verbose,report)
+        execute_test(args.altium,data,Path(args.test).resolve().parent,args.timeout,args.keep_files,args.verbose,report,args.max_runs)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
     except TestError as e:

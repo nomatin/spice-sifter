@@ -1,0 +1,46 @@
+{
+  "name": "dc_parameter_sweep",
+  "spice": "* DC parameter sweep\nV1 in 0 DC 0\nR1 in out 1k\nR2 out 0 1k\n.DC V1 0 {{VMAX}} 1\n.PLOT DC V(out)\n.END",
+  "sweep": {
+    "parameters": {
+      "VMAX": {
+        "values": [
+          2,
+          4
+        ]
+      }
+    }
+  },
+  "checks": [
+    {
+      "analysis": "dc",
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VMAX": 2
+      },
+      "min": 0.99,
+      "max": 1.01
+    },
+    {
+      "analysis": "dc",
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VMAX": 4
+      },
+      "min": 1.99,
+      "max": 2.01
+    }
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "dc_out",
+        "type": "signal",
+        "analysis": "dc",
+        "signal": "v(out)"
+      }
+    ]
+  }
+}

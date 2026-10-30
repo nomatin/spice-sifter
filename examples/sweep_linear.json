@@ -1,0 +1,69 @@
+{
+  "name": "linear_voltage_sweep",
+  "spice": "* DBUR parameter sweep\nV1 in 0 DC {{VIN}}\nR1 in out 1000\nR2 out 0 1k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "sweep": {
+    "parameters": {
+      "VIN": {
+        "start": 0,
+        "stop": 5,
+        "step": 1
+      }
+    }
+  },
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 0
+      },
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 1
+      },
+      "min": 0.49,
+      "max": 0.51
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 2
+      },
+      "min": 0.99,
+      "max": 1.01
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 3
+      },
+      "min": 1.49,
+      "max": 1.51
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 4
+      },
+      "min": 1.99,
+      "max": 2.01
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 5
+      },
+      "min": 2.49,
+      "max": 2.51
+    }
+  ]
+}

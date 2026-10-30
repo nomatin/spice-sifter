@@ -24,3 +24,4 @@ Desktop.ini
 /tests/ac_acceptance_report.json
 
 /tests/temperature_acceptance_report.json
+/tests/sweep_acceptance_report.json

@@ -1,14 +1,14 @@
-# DBUR Test 0.3
+# DBUR Test 0.4
 
 ## Описание
 
-Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim: Transient, DC, комплексный импеданс AC экспорт числовых массивов графиков и температурные серии. Принимает JSON с испытательной схемой и условиями, выполняет моделирование, читает SDF собственным парсером и возвращает один JSON-отчёт.
+Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim: Transient, DC/OP, комплексный импеданс AC, температурные серии, Parameter Sweep и экспорт числовых массивов графиков. Принимает JSON с испытательной схемой и условиями, выполняет моделирование, читает SDF собственным парсером и возвращает один JSON-отчёт.
 
 Требования: Windows 10/11, Python 3.11+, установленный и запущенный Altium Designer 24.4. Дополнительные Python-пакеты и проекты Altium не требуются. Пользовательские документы не изменяются.
 
 ## Ограничения
 
-- Поддерживаются `.TRAN`, `.DC` и `.AC` (DEC/OCT/LIN). Импеданс рассчитывается для комплексных данных AC; `.OP` не поддерживается. Неизвестный формат SDF и амплитудные AC-данные без комплексных составляющих отклоняются.
+- Поддерживаются `.TRAN`, `.DC`, `.OP` и `.AC` (DEC/OCT/LIN). Импеданс рассчитывается для комплексных данных AC; `.OP` требует явной `.PLOT OP` для сохранения выбранных сигналов. Неизвестный формат SDF и амплитудные AC-данные без комплексных составляющих отклоняются.
 - Altium должен быть открыт, лицензирован и свободен от блокирующих диалогов. Утилита не запускает закрытый Altium: возвращает `ALTIUM_NOT_RUNNING`. Наличие процесса не гарантирует его отзывчивость.
 - Одновременные запуски DBUR запрещены. Не запускайте другую симуляцию вручную во время проверки.
 - Кириллические пути моделей требуют доступных коротких имён Windows; иначе используйте путь ASCII. Вложенные относительные `.include` и кириллические директивы внутри `spice` отдельно не проверены.
@@ -40,6 +40,7 @@ python dbur_test.py examples/divider.json --altium "C:\Program Files\Altium\AD24
 | `--timeout SECONDS` | Ограничение ожидания скрипта, по умолчанию 120 секунд |
 | `--keep-files` | Сохранить временные файлы и добавить их путь в отчёт |
 | `--verbose` | Вывести диагностику в stderr |
+| `--max-runs N` | Лимит запусков Parameter Sweep, по умолчанию 100 |
 
 ### Формат теста
 
@@ -117,7 +118,7 @@ AC-проверка:
 
 Полные примеры — `examples/ac_graph_full.json` и `examples/ac_graph_limited.json`. Без `max_points` возвращаются все точки; значение должно быть целым числом не меньше 2. При сокращении сохраняются первая и последняя точки и равномерно выбираются промежуточные индексы. Такая выборка может пропускать узкие пики и резонансы. На числовые проверки сокращение не влияет.
 
-Для одного сигнала используйте `type: "signal"`, `signal: "v(out)"`, необязательный `analysis` (`tran`, `dc`, `ac`) и `components`. У действительных сигналов допустим только `real`; у AC — `real`, `imag`, `magnitude`. Если `components` не задан, возвращается `real`. Имена графиков должны быть уникальными.
+Для одного сигнала используйте `type: "signal"`, `signal: "v(out)"`, необязательный `analysis` (`tran`, `dc`, `op`, `ac`) и `components`. У действительных сигналов допустим только `real`; у AC — `real`, `imag`, `magnitude`. Если `components` не задан, возвращается `real`. Имена графиков должны быть уникальными.
 
 В `graphs` отчёта возвращаются `x`, выбранные массивы компонентов, `x_unit`, `y_unit`, `points_total`, `points_returned`. Все массивы синхронизированы и содержат числовые данные SDF без округления. Графики возвращаются и при FAIL. Если `output.graphs` отсутствует или пуст, поля `graphs` нет. Изображения не создаются.
 
@@ -146,7 +147,53 @@ python dbur_test.py examples/temperature_graphs.json
 
 Ошибки температурного входа имеют `code: "INPUT_INVALID"` и уточнение `temperature_code`: TEMP_INVALID, TEMP_CONFLICT, TEMP_CHECK_NOT_FOUND или TEMP_GRAPH_NOT_FOUND. Ошибки запуска сохраняют исходный code/message и температурную категорию TEMP_RUN_FAILED или TEMP_RESULT_MISSING. TEMP_UNSUPPORTED и TEMP_NOT_APPLIED зарезервированы для подтверждённых случаев; совпадение числовых результатов не используется как основание для них.
 
-Без `.TEMP` и `temperatures_c` температурные поля не добавляются; предыдущие JSON-тесты работают как раньше. `.OP` по-прежнему не поддерживается.
+Без `.TEMP` и `temperatures_c` температурные поля не добавляются; предыдущие JSON-тесты работают как раньше. Для `.OP` указывайте `analysis: "op"` и `.PLOT OP V(out)` в SPICE; см. `examples/sweep_op.json`. У OP-графика ось X безразмерная (`x_unit: "1"`).
+
+### Parameter Sweep
+
+Добавьте `sweep.parameters` и числовые плейсхолдеры `{{NAME}}` в основной SPICE-текст:
+
+```json
+{
+  "name": "divider_sweep",
+  "spice": "* Divider\nV1 in 0 DC {{VIN}}\nR1 in out {{RLOAD}}\nR2 out 0 1k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "sweep": {
+    "parameters": {
+      "VIN": {"values": [2, 5, 10]},
+      "RLOAD": {"values": [1000, 2000]}
+    }
+  },
+  "checks": [
+    {"signal": "v(out)", "measurement": "last", "when": {"VIN": 5, "RLOAD": 1000}, "min": 2.49, "max": 2.51}
+  ]
+}
+```
+
+```powershell
+python dbur_test.py examples/sweep_linear.json
+python dbur_test.py examples/sweep_divider.json --keep-files
+python dbur_test.py examples/sweep_temperature.json
+python dbur_test.py examples/sweep_ac.json
+python dbur_test.py examples/sweep_transient.json
+python dbur_test.py examples/sweep_op.json
+python dbur_test.py examples/sweep_dc.json
+```
+
+Для параметра задаётся либо `values`, либо `start`, `stop`, `step`. Например, `{"start": 0, "stop": 5, "step": 0.5}` даёт 11 значений. Допускаются отрицательные значения и отрицательный шаг. Шаг не равен нулю и направлен к stop; конечная точка включается только при попадании на сетку. Сетка строится через Decimal без накопления ошибок сложения float.
+
+Имена чувствительны к регистру: латинская буква или подчёркивание, затем буквы, цифры и подчёркивания. Значения — только конечные числа, не строки и не bool. Пустые сетки, дубликаты, неиспользуемые параметры и неразрешённые плейсхолдеры отклоняются. Внешние модели не редактируются. Для температуры используйте прежние `temperatures_c` или постоянную `.TEMP`; температурное поле не превращается автоматически в плейсхолдер.
+
+Перебирается декартово произведение: первый параметр меняется медленнее последнего. При совместном `temperatures_c` температура образует внешний цикл. До Altium проверяется полное число запусков с учётом температур; максимум по умолчанию — 100. Увеличить осознанно: `--max-runs 200`. При превышении возвращается `INPUT_INVALID` с рассчитанным числом, без частичного моделирования.
+
+У проверки и запроса графика необязательное `when` ограничивает комбинации. Например, `"when": {"VIN": 5}` выбирает все значения RLOAD при VIN=5. Все ключи и значения фильтра проверяются до моделирования; близкие представления float допускаются только при однозначном совпадении с сеткой. `temperature_c` в проверках и `temperatures_c` в графиках продолжают действовать одновременно с `when`.
+
+При наличии sweep ответ всегда содержит `runs` и `summary`, даже для одной комбинации. Каждый запуск имеет `run_id`, `parameters`, `checks_count`, `simulation_status`, `checks_status`; температура добавляется только при явном задании. Графики находятся в `runs[i].graphs` и содержат те же run_id/parameters/temperature_c. Параметры без применимых проверок разрешены, включая `checks: []`: статус NOT_CONFIGURED не подтверждает соответствие допускам.
+
+После обычной ошибки моделирования перебор продолжается. После тайм-аута, BUSY, потери Altium или невозможности проверить его состояние новые комбинации не запускаются. Уже полученные результаты остаются в runs, summary дополнительно содержит completed (число записей runs) и not_run; total остаётся полным плановым числом. ERROR имеет приоритет над FAIL. Ограничение времени применяется отдельно к каждой комбинации.
+
+Ошибки входа: `code: "INPUT_INVALID"` с `sweep_code`: SWEEP_INVALID, SWEEP_EMPTY, SWEEP_DUPLICATE_VALUE, SWEEP_INVALID_RANGE, SWEEP_PARAMETER_UNUSED, SWEEP_PLACEHOLDER_MISSING, SWEEP_TOO_MANY_RUNS или SWEEP_CHECK_INVALID. Ошибки выполнения сохраняют исходные code/message и уточняются как SWEEP_RUN_FAILED либо SWEEP_RESULT_MISSING.
+
+NSX и SDF автоматически **не закрываются**; вкладки Altium остаются открытыми. Нативный Parameter Sweep, `.STEP`, zip, случайные и параллельные испытания не используются.
 
 ### Результат и ошибки
 
@@ -170,8 +217,9 @@ python -m unittest discover -s tests -v
 python tests/acceptance.py
 python tests/acceptance_ac.py
 python tests/acceptance_temperature.py
+python tests/acceptance_sweep.py
 ```
 
 AC-ошибки: `AC_CHART_NOT_FOUND`, `AC_WAVE_NOT_FOUND`, `AC_COMPLEX_NOT_AVAILABLE`, `AC_FREQUENCY_OUT_OF_RANGE`, `AC_FREQUENCY_GRID_MISMATCH`, `IMPEDANCE_DIVISION_BY_ZERO`, `NON_FINITE_RESULT`, `GRAPH_EXPORT_ERROR`. Неоднозначный или неизвестный формат — `UNSUPPORTED_FORMAT`. NaN и Infinity не выводятся как JSON-числа.
 
-Сведения о реализации и результатах испытаний вынесены в [DEVELOPMENT.md](DEVELOPMENT.md), [VERIFICATION.md](VERIFICATION.md), [AC_VERIFICATION.md](AC_VERIFICATION.md) и [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md).
+Сведения о реализации и результатах испытаний вынесены в [DEVELOPMENT.md](DEVELOPMENT.md), [VERIFICATION.md](VERIFICATION.md), [AC_VERIFICATION.md](AC_VERIFICATION.md), [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md) и [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md).

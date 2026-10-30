@@ -1,0 +1,117 @@
+{
+  "name": "sweep_ac_impedance",
+  "spice": "* AC parameter sweep\nVDRV src 0 DC 0 AC 1\nVSENSE src dut 0\nR1 dut 0 {{R}}\n.AC DEC 10 10 100k\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "sweep": {
+    "parameters": {
+      "R": {
+        "values": [
+          100,
+          1000
+        ]
+      }
+    }
+  },
+  "checks": [
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "when": {
+        "R": 100
+      },
+      "min": 99.99,
+      "max": 100.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "when": {
+        "R": 100
+      },
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "when": {
+        "R": 100
+      },
+      "min": 99.99,
+      "max": 100.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "when": {
+        "R": 1000
+      },
+      "min": 999.99,
+      "max": 1000.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "when": {
+        "R": 1000
+      },
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "when": {
+        "R": 1000
+      },
+      "min": 999.99,
+      "max": 1000.01
+    }
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "impedance",
+        "type": "impedance",
+        "voltage": "v(dut)",
+        "current": "i(vsense)",
+        "current_sign": 1,
+        "components": [
+          "real",
+          "imag",
+          "magnitude"
+        ],
+        "max_points": 10
+      }
+    ]
+  }
+}

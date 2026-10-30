@@ -1,0 +1,56 @@
+{
+  "name": "temperature_parameter_sweep",
+  "spice": "* DBUR parameter sweep\nV1 in 0 DC {{VIN}}\nR1 in out 1000\nR2 out 0 1k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "sweep": {
+    "parameters": {
+      "VIN": {
+        "values": [
+          2,
+          5
+        ]
+      }
+    }
+  },
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 2
+      },
+      "min": 0.99,
+      "max": 1.01
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 5
+      },
+      "min": 2.49,
+      "max": 2.51
+    }
+  ],
+  "temperatures_c": [
+    -40,
+    25,
+    85
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "out",
+        "type": "signal",
+        "signal": "v(out)",
+        "when": {
+          "VIN": 5
+        },
+        "temperatures_c": [
+          -40,
+          85
+        ],
+        "max_points": 10
+      }
+    ]
+  }
+}

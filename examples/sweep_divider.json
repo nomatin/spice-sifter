@@ -1,0 +1,46 @@
+{
+  "name": "divider_parameter_sweep",
+  "spice": "* DBUR parameter sweep\nV1 in 0 DC {{VIN}}\nR1 in out {{RLOAD}}\nR2 out 0 1k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "sweep": {
+    "parameters": {
+      "VIN": {
+        "values": [
+          2,
+          5,
+          10
+        ]
+      },
+      "RLOAD": {
+        "values": [
+          1000,
+          2000
+        ]
+      }
+    }
+  },
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "when": {
+        "VIN": 5,
+        "RLOAD": 1000
+      },
+      "min": 2.49,
+      "max": 2.51
+    }
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "output_voltage",
+        "type": "signal",
+        "signal": "v(out)",
+        "when": {
+          "VIN": 5
+        },
+        "max_points": 200
+      }
+    ]
+  }
+}
