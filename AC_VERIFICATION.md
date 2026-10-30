@@ -1,5 +1,7 @@
 # DBUR Test 0.2 — AC Analysis & Graph Export
 
+Отчёт этапа 0.2. Температурное расширение и актуальная регрессия — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md).
+
 ## Совместимость и формат SDF
 
 Расширена существующая утилита dbur_test.py. CLI, временный DelphiScript и схема сохранения результатов остались прежними. Новые поля необязательны. Проверки без analysis по-прежнему используют Transient.

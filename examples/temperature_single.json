@@ -1,0 +1,13 @@
+{
+  "name": "diode_temperature",
+  "spice": "* Diode temperature\n.TeMp 25\nI1 0 out DC 1m\nD1 out 0 DTEST\n.MODEL DTEST D(IS=1e-14 N=1)\n.TRAN 1u 10u\n.PLOT TRAN V(out)\n.END",
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "temperature_c": 25,
+      "min": 0.6556644619223795,
+      "max": 0.6616644619223795
+    }
+  ]
+}

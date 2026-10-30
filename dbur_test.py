@@ -1,5 +1,5 @@
 """DBUR Test: input preparation and independent result validation.
-AC impedance, transient/DC checks and numeric graph export.
+Temperature series, AC impedance, transient/DC checks and numeric graph export.
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
@@ -23,7 +23,8 @@ def load_test(path):
         for key in ('name', 'spice'):
             if not isinstance(data.get(key), str) or not data[key].strip():
                 raise ValueError(f'{key} must be a nonempty string')
-        if not isinstance(data.get('checks'), list) or not data['checks']:
+        plan=temperature_plan(data)
+        if not isinstance(data.get('checks'), list) or (not data['checks'] and plan is None):
             raise ValueError('checks must be a nonempty array')
         for c in data['checks']:
             if not isinstance(c, dict):
@@ -79,6 +80,9 @@ def generate_nsx(data, base):
     if len(ends) > 1 or (ends and any(s.strip() and not s.lstrip().startswith('*') for s in lines[ends[0]+1:])):
         raise ValueError('Invalid .END position')
     includes = [f'.include "{model_path(base / m)}"' for m in data.get('models', [])]
+    temperature_plan(data)
+    # AD24.4 standalone NSX ignores .TEMP; OPTIONS TEMP was experimentally verified.
+    lines=[re.sub(r'^(\s*)\.TEMP\s+([^;$]+)',lambda m:m[1]+'.OPTIONS TEMP='+m[2].strip()+' ',line,flags=re.I) for line in lines]
     lines[1:1] = includes
     if not ends:
         lines.append('.END')
@@ -495,6 +499,7 @@ def run_altium(exe, data, base, timeout, keep, report, verbose=False):
         guard.unlink()
     work = root / uuid.uuid4().hex
     work.mkdir()
+    if 'temperature_c' in report:report['run_id']=work.name
     success = False
     timed_out = False
     try:
@@ -582,6 +587,7 @@ end;
                     if result.resolve() != expected.resolve() or not result.is_file():
                         raise TestError('SDF_NOT_SAVED','Expected current-run SDF was not saved')
                     doc=parse_sdf(result)
+                    if 'temperature_c' in report:report['simulation_status']='PASS'
                     outcome,rows=validate_document(doc,data['checks'])
                     report['checks']=rows
                     if data.get('output',{}).get('graphs'):
@@ -604,6 +610,115 @@ end;
             (root/'pending-run.txt').write_text(str(work),encoding='utf-8')
         msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
         lock.close()
+
+class TemperatureInputError(TestError):
+    def __init__(self, reason, message):
+        super().__init__('INPUT_INVALID',message)
+        self.temperature_code=reason
+
+
+def temperature_value(value):
+    if not finite_number(value) or value<=-273.15:
+        raise TemperatureInputError('TEMP_INVALID','Temperature must be finite and above -273.15 C')
+    return value
+
+
+def temperature_list(values):
+    if not isinstance(values,list) or not values:
+        raise TemperatureInputError('TEMP_INVALID','temperatures_c must be a nonempty array')
+    for v in values:temperature_value(v)
+    if len(set(values))!=len(values):
+        raise TemperatureInputError('TEMP_INVALID','Duplicate temperatures')
+    return values
+
+
+def temperature_plan(data):
+    records=[]
+    for raw in data['spice'].splitlines()[1:]:
+        line=re.split(r'[;$]',raw,maxsplit=1)[0].strip()
+        if not line or line.startswith('*'):continue
+        if line.startswith('+') and records:
+            records[-1]+=' '+line[1:]
+        else:records.append(line)
+    temps=[];options=False;depth=0
+    for line in records:
+        token=line.split()[0].casefold()
+        if token in ('.subckt','.control','.if','.alter') or (token=='.lib' and len(line.split())==2):depth+=1
+        if token in ('.ends','.endc','.endif','.endl'):depth=max(0,depth-1)
+        if token in ('.options','.option') and re.search(r'\bTEMP(?:\s*=|\s+|$)',line,re.I):options=True
+        if token=='.temp':
+            if depth:raise TemperatureInputError('TEMP_CONFLICT','.TEMP must be a top-level directive')
+            parts=line.split()
+            if len(parts)!=2 or not re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?',parts[1]):
+                raise TemperatureInputError('TEMP_INVALID','.TEMP requires exactly one numeric value')
+            temps.append(temperature_value(float(parts[1])))
+    if len(temps)>1:raise TemperatureInputError('TEMP_CONFLICT','Multiple active .TEMP directives')
+    if temps and options:raise TemperatureInputError('TEMP_CONFLICT','.TEMP conflicts with .OPTIONS TEMP')
+    if 'temperatures_c' in data:
+        values=temperature_list(data['temperatures_c'])
+        if temps or options:raise TemperatureInputError('TEMP_CONFLICT','JSON temperatures conflict with SPICE temperature directives')
+    else:values=temps or None
+    for c in data.get('checks',[]):
+        if isinstance(c,dict) and 'temperature_c' in c:
+            t=temperature_value(c['temperature_c'])
+            if values is None or t not in values:
+                raise TemperatureInputError('TEMP_CHECK_NOT_FOUND','Check refers to a temperature outside this test')
+    output=data.get('output',{})
+    if isinstance(output,dict) and isinstance(output.get('graphs',[]),list):
+        for g in output.get('graphs',[]):
+            if isinstance(g,dict) and 'temperatures_c' in g:
+                requested=temperature_list(g['temperatures_c'])
+                if values is None or any(t not in values for t in requested):
+                    raise TemperatureInputError('TEMP_GRAPH_NOT_FOUND','Graph filter refers to a temperature outside this test')
+    return values
+
+
+def error_payload(error):
+    payload=dict(code=error.code,message=error.message)
+    if hasattr(error,'temperature_code'):payload['temperature_code']=error.temperature_code
+    return payload
+
+
+def execute_one(exe,data,base,timeout,keep,verbose,temperature=None):
+    report=dict(status='ERROR',checks=[],error=None)
+    if temperature is not None:
+        report.update(temperature_c=temperature,temperature_method='OPTIONS TEMP',simulation_status='ERROR',checks_count=0,checks_status='NOT_RUN')
+    try:
+        if temperature is not None:require_running_altium(exe)
+        report['status'],report['checks']=run_altium(exe,data,base,timeout,keep,report,verbose)
+        if report['status']=='ERROR':report['error']=next(r['error'] for r in report['checks'] if 'error' in r)
+    except TestError as e:report['error']=error_payload(e)
+    except (OSError,ValueError,subprocess.TimeoutExpired) as e:
+        report['error']=dict(code='SIM_NOT_RUN',message=str(e))
+    if temperature is not None:
+        report['checks_count']=len(report['checks'])
+        report['checks_status']=('NOT_CONFIGURED' if not data['checks'] else ('NOT_RUN' if not report['checks'] else ('ERROR' if any('error' in c for c in report['checks']) else ('PASS' if all(c['passed'] for c in report['checks']) else 'FAIL'))))
+        if report['error']:report['error'].setdefault('temperature_code','TEMP_RESULT_MISSING' if report['error']['code'] in ('SDF_NOT_SAVED','SDF_PARSE_ERROR') else 'TEMP_RUN_FAILED')
+        for graph in report.get('graphs',[]):graph['temperature_c']=temperature
+    return report
+
+
+def execute_test(exe,data,base,timeout,keep,verbose,report):
+    plan=temperature_plan(data)
+    if 'temperatures_c' not in data:
+        report.update(execute_one(exe,data,base,timeout,keep,verbose,plan[0] if plan else None))
+        return
+    runs=[]
+    for t in plan:
+        variant=dict(data)
+        variant.pop('temperatures_c')
+        lines=data['spice'].splitlines();lines.insert(1,'.TEMP '+str(t))
+        variant['spice']='\n'.join(lines)
+        variant['checks']=[c for c in data['checks'] if 'temperature_c' not in c or c['temperature_c']==t]
+        if 'output' in data:
+            variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k!='temperatures_c'} for g in data['output'].get('graphs',[]) if 'temperatures_c' not in g or t in g['temperatures_c']])
+        runs.append(execute_one(exe,variant,base,timeout,keep,verbose,t))
+    report.pop('checks',None)
+    report['runs']=runs
+    report['summary']=dict(total=len(runs),passed=sum(r['status']=='PASS' for r in runs),failed=sum(r['status']=='FAIL' for r in runs),errors=sum(r['status']=='ERROR' for r in runs))
+    report['status']='ERROR' if report['summary']['errors'] else ('FAIL' if report['summary']['failed'] else 'PASS')
+    report['error']=next((r['error'] for r in runs if r['error']),None)
+
 
 class JSONArgumentParser(argparse.ArgumentParser):
     def error(self, message):
@@ -632,13 +747,11 @@ def main():
         if not args.altium or not Path(args.altium).is_file():
             raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or DBUR_ALTIUM to X2.EXE')
         require_running_altium(args.altium)
-        report['status'], report['checks'] = run_altium(args.altium, data, Path(args.test).resolve().parent, args.timeout, args.keep_files, report, args.verbose)
-        if report['status'] == 'ERROR':
-            report['error'] = next(r['error'] for r in report['checks'] if 'error' in r)
+        execute_test(args.altium,data,Path(args.test).resolve().parent,args.timeout,args.keep_files,args.verbose,report)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
     except TestError as e:
-        report['error'] = dict(code=e.code, message=e.message)
+        report['error'] = error_payload(e)
     print(json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')))
     return {'PASS':0,'FAIL':1,'ERROR':2}[report['status']]
 

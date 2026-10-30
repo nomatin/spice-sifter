@@ -22,3 +22,5 @@ Desktop.ini
 .DS_Store
 
 /tests/ac_acceptance_report.json
+
+/tests/temperature_acceptance_report.json

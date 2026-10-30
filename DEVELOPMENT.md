@@ -1,6 +1,6 @@
-# Устройство DBUR Test 0.2
+# Устройство DBUR Test 0.3
 
-Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [README.md](README.md). Результаты проверки версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
+Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [README.md](README.md). Результаты версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
 
 ## Поток данных
 
@@ -46,3 +46,12 @@
 
 - [Запуск скриптов Altium](https://www.altium.com/documentation/altium-designer/scripting/running-scripts).
 - [IServerDocument и сохранение](https://www.altium.com/documentation/altium-dxp-developer/iserverdocument-interface).
+
+
+## Температурный слой 0.3
+
+Перед прежним Runner работает планировщик execute_test: разбирает температурные директивы, валидирует ссылки проверок/графиков и последовательно вызывает execute_one для каждой температуры. Парсер SDF не менялся. Температура привязывается к уникальному run_id, а не угадывается из SDF. Данные и интерполяция AC разных запусков не смешиваются.
+
+В Altium 24.4 подтверждена альтернатива `.OPTIONS TEMP`, поскольку прямая `.TEMP` не изменила параметры контрольного диода. Подстановка выполняется в generate_nsx после валидации внешнего `.TEMP`. TNOM и файлы моделей не меняются. Варианты серии добавляют температурную директиву сразу после заголовка, вне вложенных блоков.
+
+Графики помещаются в runs[i].graphs; результаты с ошибками не уничтожают остальные элементы runs. Блокировка и pending-run.txt остаются общими; тайм-аут не приводит к принудительному завершению Altium. Подробнее: TEMPERATURE_VERIFICATION.md.

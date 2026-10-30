@@ -1,0 +1,119 @@
+{
+  "name": "temperature_ac",
+  "temperatures_c": [
+    -40,
+    25,
+    85
+  ],
+  "spice": "* Temperature coefficient resistor\nVDRV src 0 DC 0 AC 1\nVSENSE src dut 0\nR1 dut 0 1k TC=0.0039\n.OPTIONS TNOM=25\n.AC DEC 10 10 100k\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "checks": [
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "temperature_c": -40,
+      "min": 746.3999999999999,
+      "max": 746.5999999999999
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "temperature_c": -40,
+      "min": -0.1,
+      "max": 0.1
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "temperature_c": -40,
+      "min": 746.3999999999999,
+      "max": 746.5999999999999
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "temperature_c": 25,
+      "min": 999.9,
+      "max": 1000.1
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "temperature_c": 25,
+      "min": -0.1,
+      "max": 0.1
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "temperature_c": 25,
+      "min": 999.9,
+      "max": 1000.1
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "temperature_c": 85,
+      "min": 1233.9,
+      "max": 1234.1
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "temperature_c": 85,
+      "min": -0.1,
+      "max": 0.1
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "temperature_c": 85,
+      "min": 1233.9,
+      "max": 1234.1
+    }
+  ]
+}

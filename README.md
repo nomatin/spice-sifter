@@ -1,8 +1,8 @@
-# DBUR Test 0.2
+# DBUR Test 0.3
 
 ## Описание
 
-Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim: Transient, DC, комплексный импеданс AC и экспорт числовых массивов графиков. Принимает JSON с испытательной схемой и условиями, выполняет моделирование, читает SDF собственным парсером и возвращает один JSON-отчёт.
+Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim: Transient, DC, комплексный импеданс AC экспорт числовых массивов графиков и температурные серии. Принимает JSON с испытательной схемой и условиями, выполняет моделирование, читает SDF собственным парсером и возвращает один JSON-отчёт.
 
 Требования: Windows 10/11, Python 3.11+, установленный и запущенный Altium Designer 24.4. Дополнительные Python-пакеты и проекты Altium не требуются. Пользовательские документы не изменяются.
 
@@ -121,6 +121,33 @@ AC-проверка:
 
 В `graphs` отчёта возвращаются `x`, выбранные массивы компонентов, `x_unit`, `y_unit`, `points_total`, `points_returned`. Все массивы синхронизированы и содержат числовые данные SDF без округления. Графики возвращаются и при FAIL. Если `output.graphs` отсутствует или пуст, поля `graphs` нет. Изображения не создаются.
 
+### Температурные испытания
+
+Одиночная температура задаётся в SPICE директивой `.TEMP 25` (регистр не важен; разрешены отрицательные и дробные значения). Для серии добавьте верхнеуровневое поле `"temperatures_c": [-40, 25, 85]`. В серии исходный SPICE не должен содержать `.TEMP` или `.OPTIONS TEMP`.
+
+```powershell
+python dbur_test.py examples/temperature_single.json
+python dbur_test.py examples/temperature_series.json --keep-files
+python dbur_test.py examples/temperature_ac.json
+python dbur_test.py examples/temperature_graphs.json
+```
+
+**Особенность MixedSim 24.4:** в самостоятельном NSX прямая `.TEMP` не изменила характеристики проверенного диода. Подтверждённая альтернатива — `.OPTIONS TEMP=<значение>`. DBUR принимает `.TEMP` во входе и преобразует её в `.OPTIONS TEMP` только в рабочем NSX; в отчёте указывает `temperature_method: "OPTIONS TEMP"`. Исходные тесты и модели не изменяются.
+
+Температуры задаются в °C, должны быть конечными и выше −273,15 °C. Пустые списки, дубликаты, несколько активных `.TEMP`, несколько значений на директиву, вложенная `.TEMP` и конфликт с `.OPTIONS TEMP` отклоняются до запуска. Комментарии не считаются активными директивами. `TNOM` и локальные температурные параметры моделей не изменяются. Одинаковые результаты при разных температурах сами по себе не являются ошибкой: модель может не иметь температурной зависимости.
+
+У проверки можно указать `temperature_c`: она применяется только к этой температуре. Без поля проверка выполняется во всех запусках серии. Это действует для обычных измерений и AC-импеданса. Ссылка на отсутствующую температуру — `INPUT_INVALID`.
+
+Графики группируются **внутри соответствующих элементов `runs`** и содержат `temperature_c`. Необязательный фильтр графика `"temperatures_c": [-40, 85]` исключит +25 °C; без фильтра график возвращается для всей серии. `max_points` действует отдельно на каждый график. Без `output.graphs` массивов нет.
+
+Одиночная `.TEMP` сохраняет прежнюю структуру ответа, добавляя `temperature_c`. JSON-массив температур, даже из одного элемента, возвращает `runs` в исходном порядке и `summary` с числами total/passed/failed/errors. Общий ERROR имеет приоритет над FAIL. Результаты остальных температур сохраняются при ошибке; после тайм-аута небезопасные запуски блокируются существующей защитой BUSY.
+
+Каждая температура имеет отдельные `run_id`, NSX и SDF и собственное ограничение `--timeout`. `simulation_status` показывает успешность чтения результатов моделирования, `checks_count` — число выполненных проверок, `checks_status` — PASS/FAIL/ERROR, NOT_RUN или NOT_CONFIGURED. У температурных тестов допускается `checks: []`: PASS такого запуска подтверждает завершение моделирования, а не соответствие электрическим допускам.
+
+Ошибки температурного входа имеют `code: "INPUT_INVALID"` и уточнение `temperature_code`: TEMP_INVALID, TEMP_CONFLICT, TEMP_CHECK_NOT_FOUND или TEMP_GRAPH_NOT_FOUND. Ошибки запуска сохраняют исходный code/message и температурную категорию TEMP_RUN_FAILED или TEMP_RESULT_MISSING. TEMP_UNSUPPORTED и TEMP_NOT_APPLIED зарезервированы для подтверждённых случаев; совпадение числовых результатов не используется как основание для них.
+
+Без `.TEMP` и `temperatures_c` температурные поля не добавляются; предыдущие JSON-тесты работают как раньше. `.OP` по-прежнему не поддерживается.
+
 ### Результат и ошибки
 
 stdout содержит только один компактный JSON. Статусы и коды завершения: `PASS` — 0, `FAIL` — 1, `ERROR` — 2. Диагностика направляется в stderr. При сохранении артефактов отчёт содержит `artifacts` и `diagnostics`.
@@ -142,8 +169,9 @@ python -m unittest discover -s tests -v
 ```powershell
 python tests/acceptance.py
 python tests/acceptance_ac.py
+python tests/acceptance_temperature.py
 ```
 
 AC-ошибки: `AC_CHART_NOT_FOUND`, `AC_WAVE_NOT_FOUND`, `AC_COMPLEX_NOT_AVAILABLE`, `AC_FREQUENCY_OUT_OF_RANGE`, `AC_FREQUENCY_GRID_MISMATCH`, `IMPEDANCE_DIVISION_BY_ZERO`, `NON_FINITE_RESULT`, `GRAPH_EXPORT_ERROR`. Неоднозначный или неизвестный формат — `UNSUPPORTED_FORMAT`. NaN и Infinity не выводятся как JSON-числа.
 
-Сведения о реализации и результатах испытаний вынесены в [DEVELOPMENT.md](DEVELOPMENT.md), [VERIFICATION.md](VERIFICATION.md) и [AC_VERIFICATION.md](AC_VERIFICATION.md).
+Сведения о реализации и результатах испытаний вынесены в [DEVELOPMENT.md](DEVELOPMENT.md), [VERIFICATION.md](VERIFICATION.md), [AC_VERIFICATION.md](AC_VERIFICATION.md) и [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md).

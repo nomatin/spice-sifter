@@ -1,0 +1,45 @@
+{
+  "name": "diode_temperature",
+  "spice": "* Diode temperature\nI1 0 out DC 1m\nD1 out 0 DTEST\n.MODEL DTEST D(IS=1e-14 N=1)\n.TRAN 1u 10u\n.PLOT TRAN V(out)\n.END",
+  "checks": [
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "temperature_c": -40,
+      "min": 0.7688828515148072,
+      "max": 0.7748828515148072
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "temperature_c": 25,
+      "min": 0.6556644619223795,
+      "max": 0.6616644619223795
+    },
+    {
+      "signal": "v(out)",
+      "measurement": "last",
+      "temperature_c": 85,
+      "min": 0.5478605927127785,
+      "max": 0.5538605927127785
+    }
+  ],
+  "temperatures_c": [
+    -40,
+    25,
+    85
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "diode_voltage",
+        "type": "signal",
+        "signal": "v(out)",
+        "temperatures_c": [
+          -40,
+          85
+        ]
+      }
+    ]
+  }
+}

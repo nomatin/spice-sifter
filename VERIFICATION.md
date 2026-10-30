@@ -1,6 +1,6 @@
 # Проверка DBUR Test 0.1 — исторический отчёт
 
-Актуальная версия: [AC_VERIFICATION.md](AC_VERIFICATION.md). Ограничения и результаты ниже относятся к MVP 1.
+Актуальная версия: [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md). Ограничения и результаты ниже относятся к MVP 1.
 
 Дата: 30 октября 2026. Среда: Windows, Altium Designer 24.4.1.13, Python 3.14.5.
 
