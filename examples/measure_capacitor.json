@@ -1,0 +1,43 @@
+{
+  "name": "capacitor_ac_impedance",
+  "spice": "* AC capacitor\nVDRV src 0 DC 0 AC 1\nVSENSE src dut 0\nC1 dut 0 1u\n.AC OCT 30 10 1MEG\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "checks": [],
+  "measurements": [
+    {
+      "id": "capacitance_series_100",
+      "type": "capacitance_series",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "limits": {
+        "min": 9.9e-07,
+        "max": 1.0099999999999999e-06
+      }
+    },
+    {
+      "id": "capacitance_series_1000",
+      "type": "capacitance_series",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "limits": {
+        "min": 9.9e-07,
+        "max": 1.0099999999999999e-06
+      }
+    },
+    {
+      "id": "capacitance_series_10000",
+      "type": "capacitance_series",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "limits": {
+        "min": 9.9e-07,
+        "max": 1.0099999999999999e-06
+      }
+    }
+  ]
+}

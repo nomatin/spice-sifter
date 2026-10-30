@@ -1,0 +1,22 @@
+{
+  "name": "rlc_resonance",
+  "spice": "* RLC resonance\nVDRV src 0 DC 0 AC 1\nRSRC src sense 1\nVSENSE sense dut 0\nR1 dut mid 1\nL1 mid cap 1m\nC1 cap 0 1u\n.AC DEC 100 100 100k\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "checks": [],
+  "measurements": [
+    {
+      "id": "resonance",
+      "type": "resonant_frequency",
+      "method": "minimum_impedance",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_min_hz": 100,
+      "frequency_max_hz": 100000,
+      "limits": {
+        "min": 4950,
+        "max": 5100
+      },
+      "markers": true
+    }
+  ]
+}

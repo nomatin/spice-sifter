@@ -1,0 +1,113 @@
+{
+  "name": "automatic_transient_measurements",
+  "spice": "* RC transition measurements\nV1 in 0 PULSE(0 5 1m 1n 1n 10m 30m)\nR1 in out 1k\nC1 out 0 1u\n.TRAN 5u 25m\n.PLOT TRAN V(in) V(out)\n.END",
+  "checks": [],
+  "measurements": [
+    {
+      "id": "rise",
+      "type": "rise_time",
+      "signal": "v(out)",
+      "low": 0,
+      "high": 5,
+      "window": {
+        "start": 0.001,
+        "stop": 0.01
+      },
+      "limits": {
+        "min": 0.00218,
+        "max": 0.00222
+      },
+      "markers": true
+    },
+    {
+      "id": "fall",
+      "type": "fall_time",
+      "signal": "v(out)",
+      "low": 0,
+      "high": 5,
+      "window": {
+        "start": 0.011,
+        "stop": 0.025
+      },
+      "limits": {
+        "min": 0.00218,
+        "max": 0.00222
+      }
+    },
+    {
+      "id": "delay",
+      "type": "delay",
+      "trigger": {
+        "signal": "v(in)",
+        "level": 2.5,
+        "edge": "rising"
+      },
+      "target": {
+        "signal": "v(out)",
+        "level": 2.5,
+        "edge": "rising"
+      },
+      "limits": {
+        "min": 0.00068,
+        "max": 0.00071
+      },
+      "markers": true
+    },
+    {
+      "id": "settled",
+      "type": "settling_time",
+      "signal": "v(out)",
+      "target_value": 5,
+      "tolerance_rel": 0.01,
+      "start": 0.001,
+      "stop": 0.01,
+      "limits": {
+        "min": 0.00458,
+        "max": 0.00463
+      }
+    },
+    {
+      "id": "at_2ms",
+      "type": "at",
+      "signal": "v(out)",
+      "x": 0.002
+    },
+    {
+      "id": "mean",
+      "type": "mean",
+      "signal": "v(out)",
+      "window": {
+        "start": 0.005,
+        "stop": 0.009
+      }
+    },
+    {
+      "id": "rms",
+      "type": "rms",
+      "signal": "v(out)",
+      "window": {
+        "start": 0.005,
+        "stop": 0.009
+      }
+    },
+    {
+      "id": "ripple",
+      "type": "ripple",
+      "signal": "v(out)",
+      "window": {
+        "start": 0.005,
+        "stop": 0.009
+      }
+    }
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "out",
+        "type": "signal",
+        "signal": "v(out)",
+        "max_points": 10
+      }
+    ]
+  }
+}

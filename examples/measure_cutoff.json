@@ -1,0 +1,20 @@
+{
+  "name": "rc_cutoff",
+  "spice": "* RC low pass\nV1 in 0 DC 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.AC DEC 100 1 1MEG\n.PLOT AC V(in) V(out)\n.END",
+  "checks": [],
+  "measurements": [
+    {
+      "id": "cutoff",
+      "type": "cutoff_3db",
+      "input": "v(in)",
+      "output": "v(out)",
+      "reference_frequency_hz": 1,
+      "direction": "high",
+      "limits": {
+        "min": 158.5,
+        "max": 160
+      },
+      "markers": true
+    }
+  ]
+}

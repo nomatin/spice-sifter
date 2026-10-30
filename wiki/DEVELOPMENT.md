@@ -1,4 +1,4 @@
-# Устройство DBUR Test 0.4
+# Устройство DBUR Test 0.5
 
 Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [руководстве пользователя](User-Guide.md). Результаты версии 0.4 — в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md), версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
 
@@ -64,3 +64,12 @@ parameter_axes разбирает список или компактное оп�
 execute_sweep перебирает температуры и декартово произведение индексов, подставляет выбранные Decimal-значения, фильтрует проверки/графики и вызывает прежний execute_one. Контекст параметров связывается с run_id вне SDF-парсера. execute_one сохраняет старую структуру ответов при отсутствии sweep; отдельная температурная серия также не меняется.
 
 require_running_altium дополнительно читает Responding основного процесса: неотвечающий Altium даёт BUSY. Это чтение состояния процесса, без управления интерфейсом. Подробности и реальная приёмка — SWEEP_VERIFICATION.md.
+
+
+## Measurement Engine 0.5
+
+validate_measurements проверяет фиксированную схему запросов до Altium. process_measurements вызывается после чтения полного SDF и до сокращения графиков. measure_value работает только с SDFDocument: не обращается к Runner, файлам, моделям или симулятору. Limits проверяются прежним validate; вторая логика допусков не вводилась.
+
+Для sweep_crossing каждый подходящий запуск сохраняет только скалярную редукцию сигнала во внутреннем временном контексте. finish_measurements группирует значения по температуре, проверяет полноту/однозначность и формирует верхнеуровневые результаты. Держать все осциллограммы серии в памяти не требуется. Внутренние поля удаляются перед JSON.
+
+Одиночные измерения имеют run_id; семейные — scope=sweep и run_ids. Общий статус дополнительно учитывает измерения, прежние checks/runs/graphs/summary сохраняются. Формат — MEASUREMENTS.md, проверка — MEASUREMENT_VERIFICATION.md.

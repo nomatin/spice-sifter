@@ -1,5 +1,5 @@
 """DBUR Test: input preparation and independent result validation.
-Parameter/temperature series, AC impedance, transient/DC/OP checks and numeric graph export.
+Automatic measurements, parameter/temperature series, AC impedance and graph export.
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
@@ -24,7 +24,7 @@ def load_test(path,max_runs=100):
             if not isinstance(data.get(key), str) or not data[key].strip():
                 raise ValueError(f'{key} must be a nonempty string')
         plan=temperature_plan(data)
-        if not isinstance(data.get('checks'), list) or (not data['checks'] and plan is None and 'sweep' not in data):
+        if not isinstance(data.get('checks'), list) or (not data['checks'] and plan is None and 'sweep' not in data and not data.get('measurements')):
             raise ValueError('checks must be a nonempty array')
         for c in data['checks']:
             if not isinstance(c, dict):
@@ -52,6 +52,7 @@ def load_test(path,max_runs=100):
             if not (Path(path).resolve().parent / model).is_file():
                 raise ValueError(f'Model not found: {model}')
         validate_graph_requests(data.get('output', {}))
+        validate_measurements(data)
         sweep_plan(data,max_runs,Path(path).resolve().parent)
         generate_nsx(data, Path(path).resolve().parent)
         return data
@@ -116,7 +117,8 @@ COMPONENTS = ('real', 'imag', 'magnitude')
 
 
 def finite_number(v):
-    return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+    try:return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+    except OverflowError:return False
 
 
 def validate_ac_request(r, check=False):
@@ -502,7 +504,7 @@ def run_altium(exe, data, base, timeout, keep, report, verbose=False):
         guard.unlink()
     work = root / uuid.uuid4().hex
     work.mkdir()
-    if 'temperature_c' in report or 'parameters' in report:report['run_id']=work.name
+    if 'temperature_c' in report or 'parameters' in report or '_measurement_requests' in report:report['run_id']=work.name
     success = False
     timed_out = False
     try:
@@ -593,6 +595,7 @@ end;
                     if 'temperature_c' in report or 'parameters' in report:report['simulation_status']='PASS'
                     outcome,rows=validate_document(doc,data['checks'])
                     report['checks']=rows
+                    if data.get('measurements'):process_measurements(doc,data['measurements'],report)
                     if data.get('output',{}).get('graphs'):
                         report['graphs']=export_graphs(doc,data['output']['graphs'])
                     success=True
@@ -685,6 +688,8 @@ def error_payload(error):
 
 def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=None):
     report=dict(status='ERROR',checks=[],error=None)
+    if data.get('measurements'):
+        report.update(run_id=uuid.uuid4().hex,_measurement_requests=data['measurements'])
     if parameters is not None:
         report.update(parameters=parameters,run_id=uuid.uuid4().hex,simulation_status='ERROR',checks_count=0,checks_status='NOT_RUN')
     if temperature is not None:
@@ -713,6 +718,7 @@ def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
     plan=temperature_plan(data)
     if 'temperatures_c' not in data:
         report.update(execute_one(exe,data,base,timeout,keep,verbose,plan[0] if plan else None))
+        finish_measurements(data,report)
         return
     runs=[]
     for t in plan:
@@ -721,6 +727,7 @@ def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
         lines=data['spice'].splitlines();lines.insert(1,'.TEMP '+str(t))
         variant['spice']='\n'.join(lines)
         variant['checks']=[c for c in data['checks'] if 'temperature_c' not in c or c['temperature_c']==t]
+        if 'measurements' in data:variant['measurements']=[m for m in data['measurements'] if 'temperature_c' not in m or m['temperature_c']==t]
         if 'output' in data:
             variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k!='temperatures_c'} for g in data['output'].get('graphs',[]) if 'temperatures_c' not in g or t in g['temperatures_c']])
         runs.append(execute_one(exe,variant,base,timeout,keep,verbose,t))
@@ -729,6 +736,7 @@ def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
     report['summary']=dict(total=len(runs),passed=sum(r['status']=='PASS' for r in runs),failed=sum(r['status']=='FAIL' for r in runs),errors=sum(r['status']=='ERROR' for r in runs))
     report['status']='ERROR' if report['summary']['errors'] else ('FAIL' if report['summary']['failed'] else 'PASS')
     report['error']=next((r['error'] for r in runs if r['error']),None)
+    finish_measurements(data,report)
 
 
 from decimal import Decimal, localcontext
@@ -866,6 +874,7 @@ def execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs):
             variant.pop('sweep');variant.pop('temperatures_c',None)
             if 'temperatures_c' in data:
                 lines=variant['spice'].splitlines();lines.insert(1,'.TEMP '+str(t));variant['spice']='\n'.join(lines)
+            if 'measurements' in data:variant['measurements']=[m for m in data['measurements'] if applies(m) and ('temperature_c' not in m or m['temperature_c']==t)]
             variant['checks']=[{k:v for k,v in c.items() if k!='when'} for c in data['checks'] if applies(c) and ('temperature_c' not in c or c['temperature_c']==t)]
             if 'output' in data:
                 variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k not in ('when','temperatures_c')} for g in data['output'].get('graphs',[]) if applies(g) and ('temperatures_c' not in g or t in g['temperatures_c'])])
@@ -879,6 +888,336 @@ def execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs):
     if stopped:report['summary'].update(completed=len(runs),not_run=total-len(runs))
     report['status']='ERROR' if report['summary']['errors'] else ('FAIL' if report['summary']['failed'] else 'PASS')
     report['error']=next((r['error'] for r in runs if r['error']),None)
+    finish_measurements(data,report)
+
+
+MEASUREMENT_TYPES={'at','crossing','mean','rms','peak_to_peak','ripple','rise_time','fall_time','delay','settling_time','cutoff_3db','resonant_frequency','capacitance_series','inductance_series','esr','sweep_crossing','rds_on'}
+
+
+def merror(code,message):
+    raise TestError('MEASUREMENT_'+code,message)
+
+
+def validate_measurements(data):
+    requests=data.get('measurements',[])
+    if not isinstance(requests,list):merror('INVALID','measurements must be an array')
+    ids=set();axes=parameter_axes(data)
+    for r in requests:
+        if not isinstance(r,dict) or not isinstance(r.get('id'),str) or not r['id'].strip() or r['id'] in ids:merror('INVALID','Measurement ids must be unique nonempty strings')
+        ids.add(r['id'])
+        if r.get('type') not in MEASUREMENT_TYPES:merror('UNSUPPORTED','Unknown measurement type')
+        if 'when' in r:condition_indices(r['when'],axes)
+        if 'temperature_c' in r:
+            if temperature_plan(data) is None or temperature_value(r['temperature_c']) not in temperature_plan(data):merror('INVALID','Measurement temperature absent from test')
+        if r.get('analysis') not in (None,'tran','dc','op','ac'):merror('INVALID','Invalid measurement analysis')
+        if r.get('occurrence','first') not in ('first','last'):merror('INVALID','occurrence must be first or last')
+        if r.get('edge','either') not in ('rising','falling','either'):merror('INVALID','Invalid edge')
+        if 'limits' in r:
+            limits=r['limits']
+            if not isinstance(limits,dict) or not limits or set(limits)-{'min','max'}:merror('INVALID','limits must contain min and/or max')
+            if any(not finite_number(v) for v in limits.values()) or limits.get('min',-math.inf)>limits.get('max',math.inf):merror('INVALID','Invalid limits')
+        if 'window' in r:
+            w=r['window']
+            if not isinstance(w,dict) or set(w)!={'start','stop'} or not all(finite_number(v) for v in w.values()) or w['stop']<=w['start']:merror('INVALID_WINDOW','window needs finite start < stop')
+        typ=r['type']
+        required={'at':['signal','x'],'crossing':['signal','level'],'mean':['signal'],'rms':['signal'],'peak_to_peak':['signal'],'ripple':['signal','window'],'rise_time':['signal','low','high'],'fall_time':['signal','low','high'],'delay':['trigger','target'],'settling_time':['signal','target_value','start','stop'],'cutoff_3db':['input','output','reference_frequency_hz'],'resonant_frequency':['voltage','current','current_sign'],'capacitance_series':['voltage','current','current_sign','frequency_hz'],'inductance_series':['voltage','current','current_sign','frequency_hz'],'esr':['voltage','current','current_sign','frequency_hz'],'sweep_crossing':['parameter','signal','level'],'rds_on':['voltage','current','current_sign']}[typ]
+        if any(k not in r for k in required):merror('INVALID','Missing fields for '+typ+': '+', '.join(required))
+        for k in ('x','level','low','high','from_percent','to_percent','reference_frequency_hz','frequency_hz','frequency_min_hz','frequency_max_hz','target_value','start','stop','tolerance_abs','tolerance_rel','min_reactance_ohm','min_current_a','current_sign'):
+            if k in r and not finite_number(r[k]):merror('INVALID',k+' must be finite')
+        for k in ('signal','voltage','current','input','output','parameter'):
+            if k in r and (not isinstance(r[k],str) or not r[k].strip()):merror('INVALID',k+' must name a signal or parameter')
+        for key in ('parameter_unit','x_unit'):
+            if key in r and (not isinstance(r[key],str) or not r[key].strip()):merror('INVALID',key+' must be a nonempty string')
+        if 'markers' in r and not isinstance(r['markers'],bool):merror('INVALID','markers must be boolean')
+        if 'current_sign' in r and r['current_sign'] not in (-1,1):merror('INVALID','current_sign must be 1 or -1')
+        if r.get('frequency_sampling','interpolate') not in ('exact','interpolate'):merror('INVALID','Invalid frequency sampling')
+        for k in ('frequency_hz','reference_frequency_hz','frequency_min_hz','frequency_max_hz','min_current_a','min_reactance_ohm'):
+            if k in r and r[k]<=0:merror('INVALID',k+' must be positive')
+        if typ in ('rise_time','fall_time'):
+            first=r.get('from_percent',10 if typ=='rise_time' else 90);last=r.get('to_percent',90 if typ=='rise_time' else 10)
+            if r['high']<=r['low'] or not (0<=first<last<=100 if typ=='rise_time' else 0<=last<first<=100):merror('INVALID','Invalid transition levels or percentages')
+        if typ=='delay':
+            for event in ('trigger','target'):
+                e=r[event]
+                if not isinstance(e,dict) or not isinstance(e.get('signal'),str) or not finite_number(e.get('level')) or e.get('edge','rising') not in ('rising','falling','either'):merror('INVALID','Invalid delay event')
+        if typ=='settling_time':
+            ts=[k for k in ('tolerance_abs','tolerance_rel') if k in r]
+            if len(ts)!=1 or r[ts[0]]<=0 or r['stop']<=r['start'] or (ts[0]=='tolerance_rel' and r['target_value']==0):merror('INVALID','Specify exactly one positive tolerance and start < stop')
+        if r.get('frequency_axis','auto') not in ('auto','linear','log'):merror('INVALID','Invalid frequency_axis')
+        if typ=='cutoff_3db' and 'window' in r and r['window']['start']<=0:merror('INVALID_WINDOW','AC frequencies must be positive')
+        if 'frequency_min_hz' in r and 'frequency_max_hz' in r and r['frequency_min_hz']>=r['frequency_max_hz']:merror('INVALID_WINDOW','Frequency bounds must increase')
+        if typ=='cutoff_3db' and r.get('direction','high') not in ('high','low'):merror('INVALID','Invalid cutoff direction')
+        if typ=='resonant_frequency' and r.get('method','minimum_impedance')!='minimum_impedance':merror('UNSUPPORTED','Unknown resonance method')
+        if typ=='sweep_crossing':
+            if r['parameter'] not in axes:merror('INVALID','Unknown sweep axis')
+            if r['parameter'] in r.get('when',{}):merror('SWEEP_AMBIGUOUS','when must not fix measured sweep axis')
+            if r.get('reduction','last') not in ('first','last','min','max'):merror('INVALID','Invalid sweep reduction')
+
+
+def mcurve(x,y):
+    if len(x)!=len(y) or not x:merror('NOT_ENOUGH_POINTS','Empty or mismatched waveform')
+    xx=[];yy=[]
+    for a,b in zip(x,y):
+        if isinstance(a,complex) or isinstance(b,complex):merror('INVALID','Expected real waveform')
+        if not math.isfinite(a) or not math.isfinite(b):merror('NON_FINITE','Nonfinite waveform')
+        if xx and a<xx[-1]:merror('INVALID_AXIS','Axis must increase')
+        if xx and a==xx[-1]:
+            if b!=yy[-1]:merror('INVALID_AXIS','Duplicate X has conflicting Y')
+            continue
+        xx.append(a);yy.append(b)
+    return xx,yy
+
+
+def minterp(x,y,f):
+    import bisect
+    if f<x[0] or f>x[-1]:merror('OUT_OF_RANGE','Requested coordinate outside data')
+    j=bisect.bisect_left(x,f)
+    if j<len(x) and x[j]==f:return y[j]
+    return y[j-1]+(y[j]-y[j-1])*(f-x[j-1])/(x[j]-x[j-1])
+
+
+def mwindow(x,y,window=None):
+    if window is None:return x,y
+    a,b=window['start'],window['stop']
+    if a<x[0] or b>x[-1] or a>=b:merror('INVALID_WINDOW','Window outside waveform')
+    indices=[j for j,v in enumerate(x) if a<v<b]
+    return [a]+[x[j] for j in indices]+[b],[minterp(x,y,a)]+[y[j] for j in indices]+[minterp(x,y,b)]
+
+
+def mcrossings(x,y,level,edge='either'):
+    events=[];j=0
+    if len(x)>1 and y[0]==level:
+        k=0
+        while k+1<len(x) and y[k+1]==level:k+=1
+        if k+1<len(x):
+            direction='rising' if y[k+1]>level else 'falling'
+            if edge in ('either',direction):
+                if k>0:merror('AMBIGUOUS_CROSSING','Initial threshold plateau is ambiguous')
+                events.append(x[0])
+    while j<len(x)-1:
+        a,b=y[j]-level,y[j+1]-level
+        if a!=0 and b==0:
+            k=j+1
+            while k+1<len(x) and y[k+1]==level:k+=1
+            after=y[k+1]-level if k+1<len(x) else -a
+            if a*after<0:
+                if k>j+1:merror('AMBIGUOUS_CROSSING','Threshold plateau has no unique crossing coordinate')
+                direction='rising' if a<0 else 'falling'
+                if edge in ('either',direction):events.append(x[j+1])
+            j=k
+        elif a*b<0:
+            direction='rising' if a<0 else 'falling'
+            if edge in ('either',direction):events.append(x[j]+(x[j+1]-x[j])*(-a)/(b-a))
+        j+=1
+    return events
+
+
+def mselect(events,occurrence='first',ambiguous=False):
+    if not events:merror('NO_CROSSING','No matching crossing')
+    if ambiguous and len(events)>1:merror('AMBIGUOUS_CROSSING','Multiple crossings; specify occurrence or narrow window')
+    return events[-1] if occurrence=='last' else events[0]
+
+
+def measurement_wave(doc,r,name=None,analysis=None):
+    try:
+        chart=select_chart(doc,analysis or r.get('analysis','tran'),[name or r['signal']])
+        w=find_wave(chart,name or r['signal'])
+    except TestError as e:raise TestError('MEASUREMENT_SIGNAL_MISSING',e.message) from e
+    x,y=mcurve(w.x,w.y)
+    xunit={'tran':'s','dc':None,'op':'1'}.get(chart_analysis(chart))
+    if chart_analysis(chart)=='dc':
+        units={v.unit for v in chart.waves if v.x==v.y and v.x==w.x and v.unit}
+        xunit=r.get('x_unit') or (next(iter(units)) if len(units)==1 else None)
+        if xunit is None:merror('INVALID_AXIS','Cannot determine DC axis unit; specify x_unit')
+    return x,y,w.unit,xunit
+
+
+def measure_value(doc,r):
+    typ=r['type'];markers={}
+    if typ in ('capacitance_series','inductance_series','esr','resonant_frequency'):
+        x,v,i=impedance_waves(doc,r)
+        if typ=='resonant_frequency':
+            z=[abs(impedance(a,b,r)) for a,b in zip(v,i)]
+            start=max(r.get('frequency_min_hz',x[0]),r.get('window',{}).get('start',x[0]));stop=min(r.get('frequency_max_hz',x[-1]),r.get('window',{}).get('stop',x[-1]))
+            x,z=mwindow(x,z,dict(start=start,stop=stop))
+            indices=[j for j in range(1,len(x)-1) if z[j]<z[j-1] and z[j]<z[j+1]]
+            if not indices:merror('NO_EXTREMUM','No internal impedance minimum')
+            if len(indices)>1:merror('AMBIGUOUS_CROSSING','Multiple local impedance minima')
+            value=x[indices[0]];markers={'frequency_hz':value};unit='Hz'
+        else:
+            f=r['frequency_hz'];mode=r.get('frequency_sampling','interpolate');z=impedance(sampled(x,v,f,mode),sampled(x,i,f,mode),r)
+            if typ=='esr':value=z.real;unit='Ohm'
+            else:
+                minimum=r.get('min_reactance_ohm',1e-12)
+                if abs(z.imag)<minimum:merror('ZERO_DIVISION','Reactive part is too small')
+                if typ=='capacitance_series':
+                    if z.imag>=0:merror('INVALID','Capacitance requires negative reactance')
+                    value=-1/(2*math.pi*f*z.imag);unit='F'
+                else:
+                    if z.imag<=0:merror('INVALID','Inductance requires positive reactance')
+                    value=z.imag/(2*math.pi*f);unit='H'
+            markers={'frequency_hz':f}
+    elif typ=='cutoff_3db':
+        chart=select_chart(doc,'ac',[r['input'],r['output']]);a=find_wave(chart,r['input'],True);b=find_wave(chart,r['output'],True)
+        x=frequency_axis(a)
+        if x!=frequency_axis(b):merror('INVALID_AXIS','Transfer function axes differ')
+        if any(abs(v)<1e-15 for v in a.y):merror('ZERO_DIVISION','Input voltage too small')
+        h=[abs(out/inn) for out,inn in zip(b.y,a.y)]
+        if any(not math.isfinite(v) for v in h):merror('NON_FINITE','Nonfinite transfer magnitude')
+        if any(v<=0 for v in h):merror('INVALID','Zero transfer magnitude cannot be interpolated in dB')
+        axis_mode=r.get('frequency_axis','auto')
+        if axis_mode=='auto':
+            if len(x)<3:merror('NOT_ENOUGH_POINTS','Need three frequencies to infer grid or specify frequency_axis')
+            linear=all(math.isclose(b-a,x[1]-x[0],rel_tol=1e-7) for a,b in zip(x,x[1:]))
+            logarithmic=all(math.isclose(math.log(b/a),math.log(x[1]/x[0]),rel_tol=1e-7) for a,b in zip(x,x[1:]))
+            if not linear and not logarithmic:merror('INVALID_AXIS','Irregular AC grid: specify frequency_axis')
+        else:linear=axis_mode=='linear'
+        coordinate=(lambda f:f) if linear else math.log
+        inverse=(lambda f:f) if linear else math.exp
+        logx=[coordinate(v) for v in x];db=[20*math.log10(v) for v in h];f=r['reference_frequency_hz'];reference=minterp(logx,db,coordinate(f));threshold=reference-10*math.log10(2)
+        logx,db=mwindow(logx,db,{'start':coordinate(r['window']['start']),'stop':coordinate(r['window']['stop'])} if 'window' in r else None)
+        direction=r.get('direction','high');events=mcrossings(logx,db,threshold,'falling' if direction=='high' else 'rising')
+        events=[v for v in events if v>coordinate(f)] if direction=='high' else [v for v in events if v<coordinate(f)]
+        selected=mselect(events,'first' if direction=='high' else 'last');value=inverse(selected);unit='Hz';markers={'reference_frequency_hz':f,'reference_db':reference,'frequency_hz':value}
+    elif typ=='rds_on':
+        analysis=r.get('analysis','op')
+        if analysis not in ('dc','op'):merror('INVALID','RDS(on) requires DC or OP')
+        paired=SDFDocument(doc.version,[select_chart(doc,analysis,[r['voltage'],r['current']])])
+        x,v,vu,_=measurement_wave(paired,r,r['voltage'],analysis);ix,i,iu,_=measurement_wave(paired,r,r['current'],analysis)
+        if vu!='V' or iu!='A':merror('INVALID','RDS(on) needs voltage in V and current in A')
+        if x!=ix:merror('INVALID_AXIS','Voltage/current axes differ')
+        if 'x' in r:v0=minterp(x,v,r['x']);i0=minterp(ix,i,r['x'])
+        elif len(x)==1:v0=v[0];i0=i[0]
+        else:merror('SWEEP_AMBIGUOUS','Choose x for a DC curve or use one OP point')
+        if abs(i0)<r.get('min_current_a',1e-15):merror('ZERO_DIVISION','Drain current too small')
+        value=v0/(r['current_sign']*i0);unit='Ohm'
+    elif typ=='delay':
+        trigger=r['trigger'];target=r['target']
+        paired=SDFDocument(doc.version,[select_chart(doc,'tran',[trigger['signal'],target['signal']])])
+        x,y,_,_=measurement_wave(paired,r,trigger['signal'],'tran');x,y=mwindow(x,y,r.get('window'))
+        triggers=mcrossings(x,y,trigger['level'],trigger.get('edge','rising'))
+        t=mselect(triggers,r.get('occurrence','first'));next_trigger=next((v for v in triggers if v>t),math.inf)
+        tx,ty,_,_=measurement_wave(paired,r,target['signal'],'tran');tx,ty=mwindow(tx,ty,r.get('window'))
+        targets=[v for v in mcrossings(tx,ty,target['level'],target.get('edge','rising')) if t<=v<next_trigger]
+        end=mselect(targets);value=end-t;unit='s';markers={'trigger_x':t,'target_x':end}
+    else:
+        x,y,unit,xunit=measurement_wave(doc,r)
+        if typ=='settling_time':window={'start':r['start'],'stop':r['stop']}
+        else:window=r.get('window')
+        x,y=mwindow(x,y,window)
+        if typ=='at':value=minterp(x,y,r['x'])
+        else:
+            if len(x)<2:merror('NOT_ENOUGH_POINTS','Need at least two distinct points')
+            if typ in ('mean','rms'):
+                vals=[v*v for v in y] if typ=='rms' else y
+                integral=math.fsum((b-a)*(u+v)/2 for a,b,u,v in zip(x,x[1:],vals,vals[1:]))/(x[-1]-x[0])
+                value=math.sqrt(max(0,integral)) if typ=='rms' else integral
+            elif typ in ('peak_to_peak','ripple'):value=max(y)-min(y)
+            elif typ=='crossing':value=mselect(mcrossings(x,y,r['level'],r.get('edge','either')),r.get('occurrence','first'));unit=xunit;markers={'x':value,'y':r['level']}
+            elif typ in ('rise_time','fall_time'):
+                a=r['low']+(r['high']-r['low'])*r.get('from_percent',10 if typ=='rise_time' else 90)/100;b=r['low']+(r['high']-r['low'])*r.get('to_percent',90 if typ=='rise_time' else 10)/100
+                edge='rising' if typ=='rise_time' else 'falling'
+                starts=mcrossings(x,y,a,edge);ends=mcrossings(x,y,b,edge);pairs=[]
+                for start in starts:
+                    end=next((v for v in ends if v>=start),None)
+                    if end is None:continue
+                    xx,yy=mwindow(x,y,{'start':start,'stop':end})
+                    sign=1 if edge=='rising' else -1
+                    if all(sign*(v-u)>=0 for u,v in zip(yy,yy[1:])):pairs.append((start,end))
+                pair=mselect(pairs,r.get('occurrence','first'));value=pair[1]-pair[0];unit='s';markers={'start_x':pair[0],'stop_x':pair[1]}
+            elif typ=='settling_time':
+                target=r['target_value'];tol=r.get('tolerance_abs',abs(target)*r.get('tolerance_rel',0));outside=[j for j,v in enumerate(y) if abs(v-target)>tol]
+                if abs(y[-1]-target)>tol:merror('NO_CROSSING','Signal not settled before end')
+                if not outside:value=0
+                else:
+                    j=outside[-1]
+                    if j+2>=len(x):merror('NOT_ENOUGH_POINTS','Need more than one point confirming settled interval')
+                    boundary=target+math.copysign(tol,y[j]-target);entry=x[j]+(x[j+1]-x[j])*(boundary-y[j])/(y[j+1]-y[j]);value=entry-r['start']
+                unit='s';markers={'settled_x':r['start']+value}
+            else:merror('UNSUPPORTED','Unsupported local measurement')
+    if not finite_number(value):merror('NON_FINITE','Measurement produced nonfinite value')
+    return value,unit,markers
+
+
+def measurement_result(r,calculate,metadata=None):
+    row=dict(id=r['id'],type=r['type'],value=None,unit=None,status='ERROR',**(metadata or {}))
+    if 'limits' in r:row['limits']=r['limits']
+    try:
+        value,unit,markers=calculate();row.update(value=value,unit=unit,status='MEASURED')
+        if 'limits' in r:
+            _,checks=validate({'measurement':[value]},[dict(signal='measurement',measurement='last',min=r['limits'].get('min',-math.inf),max=r['limits'].get('max',math.inf))])
+            row['status']='PASS' if checks[0]['passed'] else 'FAIL'
+        if r.get('markers'):row['markers']=markers
+    except (TestError,ValueError,OverflowError,ZeroDivisionError) as e:
+        code=e.code if isinstance(e,TestError) else 'MEASUREMENT_NON_FINITE'
+        mappings={'SIGNAL_NOT_FOUND':'MEASUREMENT_SIGNAL_MISSING','AC_WAVE_NOT_FOUND':'MEASUREMENT_SIGNAL_MISSING','AC_CHART_NOT_FOUND':'MEASUREMENT_SIGNAL_MISSING','AC_FREQUENCY_OUT_OF_RANGE':'MEASUREMENT_OUT_OF_RANGE','IMPEDANCE_DIVISION_BY_ZERO':'MEASUREMENT_ZERO_DIVISION','NON_FINITE_RESULT':'MEASUREMENT_NON_FINITE','AC_FREQUENCY_GRID_MISMATCH':'MEASUREMENT_INVALID_AXIS'}
+        row['error']=dict(code=mappings.get(code,code),message=str(e))
+    return row
+
+
+def process_measurements(doc,requests,report):
+    local=[];samples={}
+    for r in requests:
+        if r['type']=='sweep_crossing':
+            def extract(r=r):
+                x,y,unit,_=measurement_wave(doc,r,analysis=r.get('analysis','op'))
+                _,checks=validate({'sample':y},[dict(signal='sample',measurement=r.get('reduction','last'),min=-math.inf,max=math.inf)])
+                return checks[0]['value']*r.get('current_sign',1),unit,{}
+            samples[r['id']]=measurement_result({k:v for k,v in r.items() if k not in ('limits','markers')},extract)
+        else:local.append(measurement_result(r,lambda r=r:measure_value(doc,r)))
+    if local:report['measurements']=local
+    if samples:report['_sweep_samples']=samples
+
+
+def finish_measurements(data,report):
+    if not data.get('measurements'):return
+    runs=report.get('runs',[report]);rows=[]
+    for run in runs:
+        local=run.pop('measurements',[])
+        requested=run.get('_measurement_requests',[])
+        completed={r['id'] for r in local}|set(run.get('_sweep_samples',{}))
+        for request in requested:
+            if request['type']!='sweep_crossing' and request['id'] not in completed:
+                local.append(measurement_result(request,lambda:merror('SIGNAL_MISSING','Simulation result unavailable for measurement')))
+        for row in local:
+            for k in ('run_id','parameters','temperature_c'):
+                if k in run:row[k]=run[k]
+        rows.extend(local)
+    for r in data['measurements']:
+        if r['type']!='sweep_crossing':continue
+        groups={}
+        for run in runs:
+            if r['id'] not in {m['id'] for m in run.get('_measurement_requests',[])}:continue
+            groups.setdefault(run.get('temperature_c'),[]).append(run)
+        if not groups:rows.append(measurement_result(r,lambda:merror('NOT_ENOUGH_POINTS','No sweep results'),dict(scope='sweep')))
+        for t,group in groups.items():
+            metadata=dict(scope='sweep',run_ids=[g['run_id'] for g in group])
+            if t is not None:metadata['temperature_c']=t
+            if r.get('when'):metadata['parameters']=r['when']
+            def calculate(group=group,r=r):
+                axes=parameter_axes(data)
+                expected=math.prod(a['count'] for name,a in axes.items() if name not in r.get('when',{}))
+                if len(group)!=expected:merror('NOT_ENOUGH_POINTS','Sweep family is incomplete')
+                pairs=[]
+                for run in group:
+                    sample=run.get('_sweep_samples',{}).get(r['id'])
+                    if sample is None:merror('SIGNAL_MISSING','A required sweep run has no measurement sample')
+                    if sample['status']=='ERROR':merror('SIGNAL_MISSING',sample['error']['message'])
+                    pairs.append((run['parameters'][r['parameter']],sample['value']))
+                pairs.sort();x=[v[0] for v in pairs];y=[v[1] for v in pairs]
+                if len(set(x))!=len(x):merror('SWEEP_AMBIGUOUS','Multiple runs for one sweep coordinate; add when filters')
+                x,y=mcurve(x,y);x,y=mwindow(x,y,r.get('window'))
+                if len(x)<2:merror('NOT_ENOUGH_POINTS','Sweep needs two coordinates')
+                value=mselect(mcrossings(x,y,r['level'],r.get('edge','either')),r.get('occurrence','first'),'occurrence' not in r)
+                return value,r.get('parameter_unit','V'),{'x':value,'y':r['level']}
+            rows.append(measurement_result(r,calculate,metadata))
+    for run in runs:
+        run.pop('_sweep_samples',None);run.pop('_measurement_requests',None)
+    report['measurements']=rows
+    if any(r['status']=='ERROR' for r in rows):
+        report['status']='ERROR'
+        if report.get('error') is None:report['error']=next(r['error'] for r in rows if r['status']=='ERROR')
+    elif report['status']=='PASS' and any(r['status']=='FAIL' for r in rows):report['status']='FAIL'
 
 
 class JSONArgumentParser(argparse.ArgumentParser):

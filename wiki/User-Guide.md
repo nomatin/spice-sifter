@@ -189,6 +189,33 @@ python dbur_test.py examples/sweep_dc.json
 
 NSX и SDF автоматически **не закрываются**; вкладки Altium остаются открытыми. Нативный Parameter Sweep, `.STEP`, zip, случайные и параллельные испытания не используются.
 
+### Автоматические измерения
+
+Массив `measurements` извлекает характеристики из SDF без повторного моделирования ради каждого измерения:
+
+```json
+{
+  "measurements": [
+    {"id": "rise", "type": "rise_time", "signal": "v(out)", "low": 0, "high": 5, "limits": {"min": 0.00218, "max": 0.00222}, "markers": true}
+  ]
+}
+```
+
+Это раздел основного JSON, а не отдельный входной файл. id уникален, limits необязателен; checks: [] допустим при наличии измерений. Статусы измерений — MEASURED без допусков, PASS/FAIL с допусками, ERROR при невозможности расчёта. Общий статус учитывает измерения; существующие checks/runs/summary не переписываются.
+
+```powershell
+python dbur_test.py examples/measure_transient.json
+python dbur_test.py examples/measure_cutoff.json
+python dbur_test.py examples/measure_resonance.json
+python dbur_test.py examples/measure_mosfet.json --keep-files
+```
+
+Доступны at, crossing, mean, rms, peak_to_peak/ripple, rise_time, fall_time, delay, settling_time, cutoff_3db, resonant_frequency, capacitance_series, inductance_series, esr, sweep_crossing и rds_on. Работают when и temperature_c; семейства разных температур не смешиваются. Расчёты используют полные массивы до max_points. При запросе markers возвращаются диагностические координаты, без изображений.
+
+Результаты находятся в верхнеуровневом measurements с run_id или scope=sweep/run_ids. Ошибка одного измерения не удаляет остальные результаты и не вызывает повторной симуляции. Отсутствие limits не подтверждает соответствие datasheet. Без measurements прежний формат ответа сохраняется.
+
+[Полный формат, алгоритмы и ограничения](MEASUREMENTS.md) · [Результаты проверки](MEASUREMENT_VERIFICATION.md).
+
 ### Результат и ошибки
 
 stdout содержит только один компактный JSON. Статусы и коды завершения: `PASS` — 0, `FAIL` — 1, `ERROR` — 2. Диагностика направляется в stderr. При сохранении артефактов отчёт содержит `artifacts` и `diagnostics`.
@@ -212,6 +239,7 @@ python tests/acceptance.py
 python tests/acceptance_ac.py
 python tests/acceptance_temperature.py
 python tests/acceptance_sweep.py
+python tests/acceptance_measurements.py
 ```
 
 AC-ошибки: `AC_CHART_NOT_FOUND`, `AC_WAVE_NOT_FOUND`, `AC_COMPLEX_NOT_AVAILABLE`, `AC_FREQUENCY_OUT_OF_RANGE`, `AC_FREQUENCY_GRID_MISMATCH`, `IMPEDANCE_DIVISION_BY_ZERO`, `NON_FINITE_RESULT`, `GRAPH_EXPORT_ERROR`. Неоднозначный или неизвестный формат — `UNSUPPORTED_FORMAT`. NaN и Infinity не выводятся как JSON-числа.

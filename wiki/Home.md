@@ -1,8 +1,10 @@
 # DBUR Test Wiki
 
-Подробная документация DBUR Test 0.4.
+Подробная документация DBUR Test 0.5.
 
 - [Руководство пользователя](User-Guide.md): параметры запуска, формат JSON, AC, графики, температуры, Parameter Sweep и ошибки.
+- [Автоматические измерения: формат и алгоритмы](MEASUREMENTS.md)
+- [Проверки измерений](MEASUREMENT_VERIFICATION.md)
 - [Разработка и устройство](DEVELOPMENT.md)
 - [Базовые проверки](VERIFICATION.md)
 - [Проверки AC](AC_VERIFICATION.md)

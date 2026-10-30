@@ -1,0 +1,43 @@
+{
+  "name": "inductor_ac_impedance",
+  "spice": "* AC inductor\nVDRV src 0 DC 0 AC 1\nRDRV src sense 1\nVSENSE sense dut 0\nL1 dut 0 1m\n.AC LIN 1001 10 10010\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "checks": [],
+  "measurements": [
+    {
+      "id": "inductance_series_100",
+      "type": "inductance_series",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "limits": {
+        "min": 0.00099,
+        "max": 0.00101
+      }
+    },
+    {
+      "id": "inductance_series_1000",
+      "type": "inductance_series",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "limits": {
+        "min": 0.00099,
+        "max": 0.00101
+      }
+    },
+    {
+      "id": "inductance_series_10000",
+      "type": "inductance_series",
+      "voltage": "v(dut)",
+      "current": "i(vsense)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "limits": {
+        "min": 0.00099,
+        "max": 0.00101
+      }
+    }
+  ]
+}
