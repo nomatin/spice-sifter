@@ -1,4 +1,5 @@
 """DBUR Test: input preparation and independent result validation.
+AC impedance, transient/DC checks and numeric graph export.
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
@@ -25,10 +26,17 @@ def load_test(path):
         if not isinstance(data.get('checks'), list) or not data['checks']:
             raise ValueError('checks must be a nonempty array')
         for c in data['checks']:
-            if not isinstance(c, dict) or not isinstance(c.get('signal'), str) or not c['signal'].strip():
-                raise ValueError('Invalid signal')
-            if c.get('measurement') not in ('first', 'last', 'min', 'max'):
-                raise ValueError('Unsupported measurement')
+            if not isinstance(c, dict):
+                raise ValueError('Each check must be an object')
+            if c.get('analysis') == 'ac':
+                validate_ac_request(c, check=True)
+            else:
+                if not isinstance(c.get('signal'), str) or not c['signal'].strip():
+                    raise ValueError('Invalid signal')
+                if c.get('analysis') not in (None, 'tran', 'dc'):
+                    raise ValueError('Unsupported analysis')
+                if c.get('measurement') not in ('first', 'last', 'min', 'max'):
+                    raise ValueError('Unsupported measurement')
             for k in ('min', 'max'):
                 v = c.get(k)
                 if isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v):
@@ -42,6 +50,7 @@ def load_test(path):
                 raise ValueError('Invalid model path')
             if not (Path(path).resolve().parent / model).is_file():
                 raise ValueError(f'Model not found: {model}')
+        validate_graph_requests(data.get('output', {}))
         generate_nsx(data, Path(path).resolve().parent)
         return data
     except (ValueError, OSError, TypeError) as e:
@@ -64,8 +73,8 @@ def model_path(path):
 
 def generate_nsx(data, base):
     lines = data['spice'].splitlines()
-    if not re.search(r'^\s*\.TRAN\b', '\n'.join(lines[1:]), re.I | re.M):
-        raise ValueError('MVP requires .TRAN after the title line; .OP is unverified')
+    if not re.search(r'^\s*\.(TRAN|AC|DC)\b', '\n'.join(lines[1:]), re.I | re.M):
+        raise ValueError('Requires .TRAN, .AC or .DC after the title line; .OP is unverified')
     ends = [i for i, line in enumerate(lines) if re.fullmatch(r'\s*\.END\s*', line, re.I)]
     if len(ends) > 1 or (ends and any(s.strip() and not s.lstrip().startswith('*') for s in lines[ends[0]+1:])):
         raise ValueError('Invalid .END position')
@@ -96,6 +105,196 @@ def validate(waves, checks):
         results.append(r)
     status = 'ERROR' if any('error' in r for r in results) else ('PASS' if all(r['passed'] for r in results) else 'FAIL')
     return status, results
+
+
+COMPONENTS = ('real', 'imag', 'magnitude')
+
+
+def finite_number(v):
+    return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+
+
+def validate_ac_request(r, check=False):
+    if check and r.get('quantity') != 'impedance':
+        raise ValueError('AC quantity must be impedance')
+    for key in ('voltage', 'current'):
+        if not isinstance(r.get(key), str) or not r[key].strip():
+            raise ValueError(key+' must name a signal')
+    if isinstance(r.get('current_sign'), bool) or r.get('current_sign') not in (1,-1):
+        raise ValueError('current_sign must be 1 or -1')
+    if not finite_number(r.get('min_current_a',1e-15)) or r.get('min_current_a',1e-15)<=0:
+        raise ValueError('min_current_a must be positive and finite')
+    if check:
+        if not finite_number(r.get('frequency_hz')) or r['frequency_hz']<=0:
+            raise ValueError('frequency_hz must be positive and finite')
+        if r.get('component') not in COMPONENTS or r.get('frequency_sampling','interpolate') not in ('exact','interpolate'):
+            raise ValueError('Invalid AC component or sampling mode')
+
+
+def validate_graph_requests(output):
+    if not isinstance(output,dict) or not isinstance(output.get('graphs',[]),list):
+        raise ValueError('output.graphs must be an array')
+    names=set()
+    for r in output.get('graphs',[]):
+        if not isinstance(r,dict) or not isinstance(r.get('name'),str) or not r['name'].strip() or r['name'] in names:
+            raise ValueError('Each graph needs a unique nonempty name')
+        names.add(r['name'])
+        if r.get('type')=='impedance':
+            validate_ac_request(r)
+            if r.get('analysis','ac')!='ac':raise ValueError('Impedance requires AC')
+        elif r.get('type')=='signal':
+            if not isinstance(r.get('signal'),str) or not r['signal'].strip():raise ValueError('Graph signal required')
+            if r.get('analysis') not in (None,'ac','tran','dc'):raise ValueError('Invalid graph analysis')
+        else:raise ValueError('Unknown graph type')
+        cs=r.get('components',['real'])
+        if not isinstance(cs,list) or not cs or any(c not in COMPONENTS for c in cs) or len(cs)!=len(set(cs)):
+            raise ValueError('Invalid graph components')
+        m=r.get('max_points')
+        if 'max_points' in r and (isinstance(m,bool) or not isinstance(m,int) or m<2):
+            raise ValueError('max_points must be an integer >= 2 to preserve endpoints')
+
+
+def chart_analysis(chart):
+    return {'transient analysis':'tran','ac analysis':'ac','dc sweep':'dc'}.get(chart.name.casefold())
+
+
+def select_chart(doc, analysis, signals):
+    candidates=[c for c in doc.charts if analysis is None or chart_analysis(c)==analysis]
+    if not candidates:
+        raise TestError('AC_CHART_NOT_FOUND' if analysis=='ac' else 'GRAPH_EXPORT_ERROR','Requested analysis not found')
+    matching=[c for c in candidates if all(any(w.name.casefold()==s.casefold() for w in c.waves) for s in signals)]
+    if len(matching)>1:
+        raise TestError('UNSUPPORTED_FORMAT','Ambiguous charts: cannot select a run safely')
+    if not matching:
+        raise TestError('AC_WAVE_NOT_FOUND' if analysis=='ac' else 'SIGNAL_NOT_FOUND','Signals not found in one chart: '+', '.join(signals))
+    return matching[0]
+
+
+def find_wave(chart,name,ac=False):
+    waves=[w for w in chart.waves if w.name.casefold()==name.casefold()]
+    if len(waves)!=1:
+        raise TestError('AC_WAVE_NOT_FOUND' if ac else 'SIGNAL_NOT_FOUND','Signal missing or ambiguous: '+name)
+    return waves[0]
+
+
+def finite_values(values):
+    for v in values:
+        if not math.isfinite(v.real) or not math.isfinite(v.imag):
+            raise TestError('NON_FINITE_RESULT','Nonfinite waveform data')
+
+
+def frequency_axis(w):
+    finite_values(w.x);finite_values(w.y)
+    if not w.is_complex or not all(isinstance(v,complex) for v in w.y):
+        raise TestError('AC_COMPLEX_NOT_AVAILABLE','Complex data unavailable: '+w.name)
+    x=[]
+    for v in w.x:
+        if isinstance(v,complex) and v.imag!=0:
+            raise TestError('UNSUPPORTED_FORMAT','Complex-valued frequency axis')
+        x.append(v.real)
+    if len(x)!=len(w.y) or not x or any(v<=0 for v in x) or any(b<=a for a,b in zip(x,x[1:])):
+        raise TestError('AC_FREQUENCY_GRID_MISMATCH','Frequency axis must be positive and strictly increasing')
+    return x
+
+
+def impedance_waves(doc,r):
+    chart=select_chart(doc,'ac',[r['voltage'],r['current']])
+    v=find_wave(chart,r['voltage'],True);i=find_wave(chart,r['current'],True)
+    if v.unit.casefold()!='v' or i.unit.casefold()!='a':
+        raise TestError('AC_WAVE_NOT_FOUND','Impedance requires voltage in V and current in A')
+    x=frequency_axis(v);ix=frequency_axis(i)
+    if len(x)!=len(ix) or any(a!=b for a,b in zip(x,ix)):
+        raise TestError('AC_FREQUENCY_GRID_MISMATCH','Voltage/current frequency grids differ')
+    return x,v.y,i.y
+
+
+def impedance(v,i,r):
+    finite_values([v,i])
+    if math.hypot(i.real,i.imag)<r.get('min_current_a',1e-15):
+        raise TestError('IMPEDANCE_DIVISION_BY_ZERO','Current is zero or below min_current_a')
+    z=v/(r['current_sign']*i)
+    finite_values([z])
+    return z
+
+
+def sampled(x,values,f,mode):
+    import bisect
+    idx=bisect.bisect_left(x,f)
+    for j in (idx,idx-1):
+        if 0<=j<len(x) and math.isclose(x[j],f,rel_tol=1e-10,abs_tol=0):return values[j]
+    if f<x[0] or f>x[-1]:
+        raise TestError('AC_FREQUENCY_OUT_OF_RANGE','Requested frequency is outside sweep')
+    if mode=='exact':
+        raise TestError('AC_FREQUENCY_OUT_OF_RANGE','Exact frequency not present in sweep')
+    t=(f-x[idx-1])/(x[idx]-x[idx-1])
+    return values[idx-1]*(1-t)+values[idx]*t
+
+
+def component_value(z,component):
+    v={'real':lambda:z.real,'imag':lambda:z.imag,'magnitude':lambda:math.hypot(z.real,z.imag)}[component]()
+    finite_values([v])
+    return v
+
+
+def validate_document(doc,checks):
+    results=[]
+    for c in checks:
+        if c.get('analysis')!='ac':
+            try:
+                chart=select_chart(doc,c.get('analysis','tran'),[c['signal']])
+                matches=[w for w in chart.waves if w.name.casefold()==c['signal'].casefold()]
+                if len(matches)!=1:raise TestError('SIGNAL_NOT_FOUND','Signal absent or ambiguous: '+c['signal'])
+                _,out=validate({matches[0].name:matches[0].y},[c]);results.extend(out)
+            except TestError as e:
+                results.append(dict(c,value=None,passed=False,error=dict(code=e.code,message=e.message)))
+            continue
+        row=dict(c,value=None,unit='Ohm',passed=False)
+        try:
+            x,v,i=impedance_waves(doc,c)
+            f=c['frequency_hz'];mode=c.get('frequency_sampling','interpolate')
+            z=impedance(sampled(x,v,f,mode),sampled(x,i,f,mode),c)
+            value=component_value(z,c['component'])
+            row.update(value=value,passed=c['min']<=value<=c['max'])
+        except TestError as e:row['error']=dict(code=e.code,message=e.message)
+        results.append(row)
+    status='ERROR' if any('error' in r for r in results) else ('PASS' if all(r['passed'] for r in results) else 'FAIL')
+    return status,results
+
+
+def export_graphs(doc,requests):
+    graphs=[]
+    for r in requests:
+        if r['type']=='impedance':
+            x,v,i=impedance_waves(doc,r)
+            values=[impedance(a,b,r) for a,b in zip(v,i)]
+            analysis='ac';unit='Ohm'
+        else:
+            chart=select_chart(doc,r.get('analysis'),[r['signal']])
+            wave=find_wave(chart,r['signal'],chart_analysis(chart)=='ac')
+            analysis=chart_analysis(chart)
+            if analysis is None:raise TestError('GRAPH_EXPORT_ERROR','Unknown analysis units')
+            if analysis=='ac':x=frequency_axis(wave)
+            else:
+                x=wave.x
+                finite_values(x);finite_values(wave.y)
+                if any(isinstance(v,complex) for v in x+wave.y):raise TestError('GRAPH_EXPORT_ERROR','Expected real waveform')
+            values=wave.y;unit=wave.unit
+            if analysis!='ac' and any(c!='real' for c in r.get('components',['real'])):
+                raise TestError('GRAPH_EXPORT_ERROR','Real signals support only the real component')
+        n=len(x)
+        if n!=len(values) or n==0:raise TestError('GRAPH_EXPORT_ERROR','Invalid waveform length')
+        limit=min(n,r.get('max_points',n))
+        indices=list(range(n)) if limit==n else [j*(n-1)//(limit-1) for j in range(limit)]
+        xunit='Hz' if analysis=='ac' else 's'
+        if analysis=='dc':
+            units={w.unit for w in chart.waves if w.x==w.y and w.x==x and w.unit}
+            if len(units)!=1:raise TestError('GRAPH_EXPORT_ERROR','Cannot determine DC sweep units unambiguously')
+            xunit=next(iter(units))
+        graph=dict(name=r['name'],analysis=analysis,x_unit=xunit,y_unit=unit,points_total=n,points_returned=len(indices),x=[x[j] for j in indices])
+        for component in r.get('components',['real']):
+            graph[component]=[component_value(values[j],component) for j in indices]
+        graphs.append(graph)
+    return graphs
 
 
 from dataclasses import dataclass, field
@@ -172,20 +371,24 @@ def parse_sdf_bytes(data):
                 n = int(wm['WavePoints'])
                 if n <= 0 or n > len(data)//24:
                     raise ValueError('Invalid point count')
-                if wm.get('WaveIsXComplex') != 'FALSE' or wm.get('WaveIsYComplex') != 'FALSE':
-                    raise TestError('UNSUPPORTED_FORMAT', 'Complex binary layout has not been verified')
-                size = 16*n
+                flags=[wm.get('WaveIsXComplex'),wm.get('WaveIsYComplex')]
+                if any(f not in ('TRUE','FALSE') for f in flags):
+                    raise TestError('UNSUPPORTED_FORMAT','Invalid complex flags')
+                xc,yc=[f=='TRUE' for f in flags]
+                width=2+int(xc)+int(yc)
+                size = 8*width*n
                 if pos + size > len(data):
                     raise ValueError('Truncated double block')
-                values = list(struct.iter_unpack('<dd', data[pos:pos+size]))
+                raw=list(struct.iter_unpack('<'+'d'*width,data[pos:pos+size]))
+                values=[(complex(v[0],v[1]) if xc else v[0],complex(v[1+int(xc)],v[2+int(xc)]) if yc else v[1+int(xc)]) for v in raw]
                 pos += size
                 consume(b'\nWaveDataStart\n')
-                size = 8*n
+                size = 4*width*n
                 if pos + size > len(data):
                     raise ValueError('Truncated single block')
                 pos += size
                 consume(b'\n')
-                chart.waves.append(SDFWave(wave_name, wm.get('WaveYUnitStr',''),wm.get('WaveVariableType',''),n,[v[0] for v in values],[v[1] for v in values]))
+                chart.waves.append(SDFWave(wave_name, wm.get('WaveYUnitStr',''),wm.get('WaveVariableType',''),n,[v[0] for v in values],[v[1] for v in values],yc))
                 wave_name = None
                 wm = {}
             except (KeyError, ValueError, struct.error) as e:
@@ -379,16 +582,12 @@ end;
                     if result.resolve() != expected.resolve() or not result.is_file():
                         raise TestError('SDF_NOT_SAVED','Expected current-run SDF was not saved')
                     doc=parse_sdf(result)
-                    charts=[c for c in doc.charts if c.name.casefold()=='transient analysis']
-                    if len(charts)!=1:
-                        raise TestError('UNSUPPORTED_FORMAT','Expected one unambiguous Transient Analysis chart')
-                    waves={}
-                    for wave in charts[0].waves:
-                        if wave.name in waves:
-                            raise TestError('UNSUPPORTED_FORMAT','Duplicate wave name')
-                        waves[wave.name]=wave.y
+                    outcome,rows=validate_document(doc,data['checks'])
+                    report['checks']=rows
+                    if data.get('output',{}).get('graphs'):
+                        report['graphs']=export_graphs(doc,data['output']['graphs'])
                     success=True
-                    return validate(waves,data['checks'])
+                    return outcome,rows
             if time.monotonic()>=deadline:
                 timed_out=True
                 code='TIMEOUT' if (work/'started.txt').exists() else 'SCRIPT_NOT_EXECUTED'

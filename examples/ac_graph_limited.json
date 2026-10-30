@@ -1,0 +1,134 @@
+{
+  "name": "resistor_ac_impedance",
+  "spice": "* AC resistor\nVDRV src 0 DC 0 AC 1\nVSENSE src dut 0\nR1 dut 0 1k\n.AC DEC 100 10 1MEG\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "checks": [
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "component": "real",
+      "min": 990.0,
+      "max": 1010.0
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "component": "imag",
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "component": "magnitude",
+      "min": 990.0,
+      "max": 1010.0
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "min": 990.0,
+      "max": 1010.0
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "min": 990.0,
+      "max": 1010.0
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "component": "real",
+      "min": 990.0,
+      "max": 1010.0
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "component": "imag",
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "component": "magnitude",
+      "min": 990.0,
+      "max": 1010.0
+    }
+  ],
+  "output": {
+    "graphs": [
+      {
+        "name": "z_dut",
+        "type": "impedance",
+        "voltage": "v(dut)",
+        "current": "i(VSENSE)",
+        "current_sign": 1,
+        "components": [
+          "real",
+          "imag",
+          "magnitude"
+        ],
+        "max_points": 100
+      },
+      {
+        "name": "voltage",
+        "type": "signal",
+        "analysis": "ac",
+        "signal": "v(dut)",
+        "components": [
+          "real",
+          "imag",
+          "magnitude"
+        ],
+        "max_points": 100
+      }
+    ]
+  }
+}

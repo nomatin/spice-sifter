@@ -1,0 +1,105 @@
+{
+  "name": "capacitor_ac_impedance",
+  "spice": "* AC capacitor\nVDRV src 0 DC 0 AC 1\nVSENSE src dut 0\nC1 dut 0 1u\n.AC OCT 30 10 1MEG\n.PLOT AC V(dut) I(VSENSE)\n.END",
+  "checks": [
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "component": "real",
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "component": "imag",
+      "min": -1607.464925228143,
+      "max": -1575.6339366097639
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 100,
+      "component": "magnitude",
+      "min": 1575.6339366097639,
+      "max": 1607.464925228143
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "real",
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "imag",
+      "min": -160.7464925228143,
+      "max": -157.5633936609764
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 1000,
+      "component": "magnitude",
+      "min": 157.5633936609764,
+      "max": 160.7464925228143
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "component": "real",
+      "min": -0.01,
+      "max": 0.01
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "component": "imag",
+      "min": -16.07464925228143,
+      "max": -15.756339366097638
+    },
+    {
+      "analysis": "ac",
+      "quantity": "impedance",
+      "voltage": "v(dut)",
+      "current": "i(VSENSE)",
+      "current_sign": 1,
+      "frequency_hz": 10000,
+      "component": "magnitude",
+      "min": 15.756339366097638,
+      "max": 16.07464925228143
+    }
+  ]
+}
