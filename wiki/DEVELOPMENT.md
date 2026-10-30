@@ -1,6 +1,6 @@
 # Устройство DBUR Test 0.4
 
-Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [README.md](README.md). Результаты версии 0.4 — в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md), версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
+Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [руководстве пользователя](User-Guide.md). Результаты версии 0.4 — в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md), версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
 
 ## Поток данных
 
