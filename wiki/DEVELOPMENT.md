@@ -73,3 +73,14 @@ validate_measurements проверяет фиксированную схему �
 Для sweep_crossing каждый подходящий запуск сохраняет только скалярную редукцию сигнала во внутреннем временном контексте. finish_measurements группирует значения по температуре, проверяет полноту/однозначность и формирует верхнеуровневые результаты. Держать все осциллограммы серии в памяти не требуется. Внутренние поля удаляются перед JSON.
 
 Одиночные измерения имеют run_id; семейные — scope=sweep и run_ids. Общий статус дополнительно учитывает измерения, прежние checks/runs/graphs/summary сохраняются. Формат — MEASUREMENTS.md, проверка — MEASUREMENT_VERIFICATION.md.
+
+
+## DbLib Component Mode
+
+Второй режим включается наличием `component` во входном JSON. `dblib_runner.py` выполняет предварительную проверку библиотеки и таблицы, копирует неизменяемый шаблон `dblib_resources/template` в `temp/dblib_runs/<run_id>/`, подставляет пути в `dblib_resources/dblib_experiment.pas` и запускает его в уже работающем Altium. Standalone-режим и его Runner не изменяются; оба режима используют общую блокировку `altium_session()` и общий `pending-run.txt`.
+
+DelphiScript вызывает `SchServer.LoadComponentFromDatabaseLibrary`, размещает `ISch_Component` через `MoveToXY`/`RegisterSchObjectInContainer`, вычисляет hotspot выводов, создаёт короткие Wire и Net Label, компилирует проект и проверяет принадлежность выводов DUT цепям `DUT_P`/`GND`. Затем Altium генерирует NSX из SchDoc, а второй вызов `ADVSIM:RunSimulator` по этому NSX создаёт SDF. Координатный fallback очистки `X >= 4000` не используется: удаляются только объекты из журнала текущего запуска (DUT UniqueID, Wire, Net Label). Очистка выполняется и при FAIL/ERROR; документы Altium не закрываются.
+
+Python дополнительно проверяет источник компонента, ID, таблицу, два вывода, SIM Implementation и Port Map, NSX (ровно один DUT, `.SUBCKT`, порядок цепей) и актуальность NSX/SDF по каталогу и времени запуска. Проектный SDF может содержать несколько одинаковых chart setups; для вызова прежнего Validator они схлопываются по анализу и набору сигналов. Далее используются только существующие `parse_sdf()`, `validate_document()`, `process_measurements()`, `finish_measurements()` и `export_graphs()`.
+
+Поддерживается одиночное испытание; `sweep`, `temperatures_c` и `when` в DbLib-режиме отклоняются до запуска. Ресурсы режима и шаблон входят в репозиторий; рабочие копии создаются только в `temp`. Тесты: `tests/test_dblib.py` (без Altium) и `tests/acceptance_dblib.py` (реальная библиотека `MY_LIB.DbLib`).

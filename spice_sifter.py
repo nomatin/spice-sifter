@@ -5,6 +5,7 @@ Automatic measurements, parameter/temperature series, AC impedance and graph exp
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -22,30 +23,18 @@ def load_test(path,max_runs=100):
         data = json.loads(Path(path).read_text(encoding='utf-8-sig'), parse_constant=lambda x: (_ for _ in ()).throw(ValueError('Nonstandard JSON number: '+x)))
         if not isinstance(data, dict):
             raise ValueError('Expected an object')
-        for key in ('name', 'spice'):
-            if not isinstance(data.get(key), str) or not data[key].strip():
-                raise ValueError(f'{key} must be a nonempty string')
+        if not isinstance(data.get('name'), str) or not data['name'].strip():
+            raise ValueError('name must be a nonempty string')
+        if 'spice' in data and 'component' in data:
+            raise ValueError('spice and component are mutually exclusive')
+        if 'component' in data:
+            return load_component_test(data)
+        if not isinstance(data.get('spice'), str) or not data['spice'].strip():
+            raise ValueError('spice must be a nonempty string')
         plan=temperature_plan(data)
         if not isinstance(data.get('checks'), list) or (not data['checks'] and plan is None and 'sweep' not in data and not data.get('measurements')):
             raise ValueError('checks must be a nonempty array')
-        for c in data['checks']:
-            if not isinstance(c, dict):
-                raise ValueError('Each check must be an object')
-            if c.get('analysis') == 'ac':
-                validate_ac_request(c, check=True)
-            else:
-                if not isinstance(c.get('signal'), str) or not c['signal'].strip():
-                    raise ValueError('Invalid signal')
-                if c.get('analysis') not in (None, 'tran', 'dc', 'op'):
-                    raise ValueError('Unsupported analysis')
-                if c.get('measurement') not in ('first', 'last', 'min', 'max'):
-                    raise ValueError('Unsupported measurement')
-            for k in ('min', 'max'):
-                v = c.get(k)
-                if isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v):
-                    raise ValueError('Bounds must be finite numbers')
-            if c['min'] > c['max']:
-                raise ValueError('Reversed bounds')
+        validate_checks(data['checks'])
         if not isinstance(data.get('models', []), list):
             raise ValueError('models must be an array')
         for model in data.get('models', []):
@@ -60,6 +49,66 @@ def load_test(path,max_runs=100):
         return data
     except (ValueError, OSError, TypeError) as e:
         raise TestError('INPUT_INVALID', str(e)) from e
+
+
+def validate_checks(checks):
+    for c in checks:
+        if not isinstance(c, dict):
+            raise ValueError('Each check must be an object')
+        if c.get('analysis') == 'ac':
+            validate_ac_request(c, check=True)
+        else:
+            if not isinstance(c.get('signal'), str) or not c['signal'].strip():
+                raise ValueError('Invalid signal')
+            if c.get('analysis') not in (None, 'tran', 'dc', 'op'):
+                raise ValueError('Unsupported analysis')
+            if c.get('measurement') not in ('first', 'last', 'min', 'max'):
+                raise ValueError('Unsupported measurement')
+        for k in ('min', 'max'):
+            v = c.get(k)
+            if isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v):
+                raise ValueError('Bounds must be finite numbers')
+        if c['min'] > c['max']:
+            raise ValueError('Reversed bounds')
+
+
+def load_component_test(data):
+    from dblib_runner import FIXTURES
+    component = data.get('component')
+    if not isinstance(component, dict):
+        raise ValueError('component must be an object')
+    for key in ('library', 'page', 'id'):
+        if not isinstance(component.get(key), str) or not component[key].strip():
+            raise ValueError('component.' + key + ' must be a nonempty string')
+    fixture = data.get('fixture')
+    if not isinstance(fixture, str) or fixture not in FIXTURES:
+        raise ValueError('component mode requires a supported fixture: ' + ', '.join(sorted(FIXTURES)))
+    if 'sweep' in data:
+        raise ValueError('sweep is not supported in component mode')
+    if data.get('models'):
+        raise ValueError('models are not supported in component mode; use the DbLib SIM implementation')
+    if 'temperatures_c' in data or 'temperature_c' in data:
+        raise ValueError('temperature series are not supported in component mode')
+    checks = data.get('checks', [])
+    if not isinstance(checks, list):
+        raise ValueError('checks must be an array')
+    validate_checks(checks)
+    for request in checks:
+        if 'when' in request or 'temperature_c' in request:
+            raise ValueError('when/temperature_c are not supported in component checks')
+    for request in data.get('measurements', []):
+        if isinstance(request, dict) and ('when' in request or 'temperature_c' in request):
+            raise ValueError('when/temperature_c are not supported in component measurements')
+    output = data.get('output', {})
+    if isinstance(output, dict):
+        for graph in output.get('graphs', []):
+            if isinstance(graph, dict) and ('when' in graph or 'temperatures_c' in graph):
+                raise ValueError('when/temperatures_c are not supported in component graphs')
+    validate_graph_requests(output)
+    probe = dict(data, spice='* component fixture')
+    validate_measurements(probe)
+    return data
+
 
 def model_path(path):
     value=str(path.resolve())
@@ -481,7 +530,9 @@ def read_status(path):
     return dict(line.split('=',1) for line in text.splitlines() if '=' in line)
 
 
-def run_altium(exe, data, base, timeout, keep, report, verbose=False):
+@contextmanager
+def altium_session():
+    """Shared Altium lock and pending-run guard for every runner mode."""
     root = Path(tempfile.gettempdir()) / 'SpiceSifter'
     root.mkdir(exist_ok=True)
     guard=root/'pending-run.txt'
@@ -496,14 +547,29 @@ def run_altium(exe, data, base, timeout, keep, report, verbose=False):
     except OSError:
         lock.close()
         raise TestError('BUSY','Another Spice Sifter run holds the Altium lock')
-    if guard.exists():
-        pending=Path(guard.read_text(encoding='utf-8'))
-        previous=read_status(pending/'status.txt')
-        if previous.get('STATUS') not in ('OK','ERROR'):
-            msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
-            lock.close()
-            raise TestError('BUSY','Previous timed-out run has not completed: '+str(pending))
-        guard.unlink()
+    try:
+        if guard.exists():
+            pending=Path(guard.read_text(encoding='utf-8'))
+            previous=read_status(pending/'status.txt')
+            if previous.get('STATUS') not in ('OK','ERROR'):
+                raise TestError('BUSY','Previous timed-out run has not completed: '+str(pending))
+            guard.unlink()
+        yield root
+    finally:
+        msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
+        lock.close()
+
+
+def with_altium_session(function):
+    def wrapped(*args, **kwargs):
+        with altium_session():
+            return function(*args, **kwargs)
+    return wrapped
+
+
+@with_altium_session
+def run_altium(exe, data, base, timeout, keep, report, verbose=False):
+    root = Path(tempfile.gettempdir()) / 'SpiceSifter'
     work = root / uuid.uuid4().hex
     work.mkdir()
     if 'temperature_c' in report or 'parameters' in report or '_measurement_requests' in report:report['run_id']=work.name
@@ -616,8 +682,6 @@ end;
         if timed_out:
             # A timed-out script may still run. Preserve a guard for subsequent calls.
             (root/'pending-run.txt').write_text(str(work),encoding='utf-8')
-        msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
-        lock.close()
 
 class TemperatureInputError(TestError):
     def __init__(self, reason, message):
@@ -715,6 +779,9 @@ def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=N
 
 
 def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
+    if 'component' in data:
+        from dblib_runner import execute_component
+        return execute_component(exe,data,base,timeout,verbose,report)
     if 'sweep' in data:
         return execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs)
     plan=temperature_plan(data)
@@ -1251,7 +1318,8 @@ def main():
                     args.altium=str(candidate)
         if not args.altium or not Path(args.altium).is_file():
             raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or SPICE_SIFTER_ALTIUM to X2.EXE')
-        require_running_altium(args.altium)
+        if 'component' not in data:
+            require_running_altium(args.altium)
         execute_test(args.altium,data,Path(args.test).resolve().parent,args.timeout,args.keep_files,args.verbose,report,args.max_runs)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         report['error'] = dict(code='SIM_NOT_RUN', message=str(e))

@@ -2,9 +2,31 @@
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
-Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim. Принимает JSON с испытательной схемой и условиями, выполняет моделирование и возвращает JSON-отчёт.
+Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim. Принимает JSON с испытательной схемой или компонентом DbLib, выполняет моделирование и возвращает JSON-отчёт.
 
 Поддерживает Transient, DC/OP, комплексный импеданс AC, температурные серии, Parameter Sweep, экспорт числовых массивов графиков и автоматическое извлечение характеристик.
+
+## Два режима
+
+- **Standalone SPICE** — входной JSON содержит `spice`; проверяется готовая SPICE-схема.
+- **DbLib Component** — входной JSON содержит `component`; компонент автоматически размещается на подготовленном SchDoc, Altium генерирует NSX, MixedSim выполняет симуляцию, а результат проходит через тот же SDF-парсер, Validator и Measurement Engine.
+
+Пример DbLib-запуска (`R0009`, резистор 1 Ом):
+
+```json
+{
+  "name": "dblib_resistor_r0009",
+  "component": {"library": "MY_LIB.DbLib", "page": "Резисторы", "id": "R0009"},
+  "fixture": "resistor_dc",
+  "checks": [{"analysis": "op", "signal": "v(dut_p)", "measurement": "first", "min": -1.06, "max": -0.94}]
+}
+```
+
+```powershell
+python spice_sifter.py examples/dblib_resistor_r0009.json
+```
+
+Для DbLib-режима доступны `fixture`: `resistor_dc`, `diode_forward`, `diode_reverse`. Библиотека задаётся коротким именем установленной DbLib или полным путём к `.DbLib`. Рабочие файлы каждого запуска остаются в `temp/dblib_runs/<run_id>/`; исходный шаблон не изменяется.
 
 ## Требования
 
