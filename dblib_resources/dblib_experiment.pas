@@ -207,10 +207,11 @@ begin
 end;
 
 { Remove only objects recorded in this run's journal. No coordinate fallback. }
-procedure CleanupCreatedObjects(Doc : ISch_Document; DutUid : WideString;
-  Journal : TStringList; S : TStringList);
+function CleanupCreatedObjects(Doc : ISch_Document; DutUid : WideString;
+  Journal : TStringList; S : TStringList) : Boolean;
 var I, Expected, Removed : Integer; Uid : WideString; Ok : Boolean;
 begin
+  Result := False;
   Expected := Journal.Count;
   if DutUid <> '' then Inc(Expected);
   Removed := 0;
@@ -243,6 +244,7 @@ begin
     S.Add('stage_schematic_cleanup=FAIL');
     S.Add('cleanup_error=SCHEMATIC_CLEANUP_FAILED');
   end;
+  Result := Ok;
 end;
 
 procedure RunExperiment;
@@ -265,6 +267,7 @@ var
   NetPin : INetItem;
   FoundDutP, FoundGnd, SimModelFound : Boolean;
   CompileResult, Failed, IdMatch, LibraryMatch, TableMatch : Boolean;
+  CleanupOk : Boolean;
   Cnt : Integer;
   Tmp : WideString;
 begin
@@ -612,6 +615,7 @@ begin
   end;
 
   { Cleanup is mandatory after placement, including FAIL/ERROR paths. }
+  CleanupOk := False;
   try
     if D <> Nil then begin
       D := Client.GetDocumentByPath(DocPath);
@@ -619,22 +623,51 @@ begin
       Doc := SchServer.GetSchDocumentByPath(DocPath);
     end;
     if Doc = Nil then begin
-      S.Add('stage_schematic_cleanup=FAIL');
-      S.Add('cleanup_error=SCHEMATIC_CLEANUP_FAILED');
+      S.Add('stage_schematic_cleanup=NOT_APPLICABLE');
+      S.Add('schematic_saved_after_cleanup=0');
+      if not Failed then begin
+        AddError(S, 'schematic_cleanup', 'SCHEMATIC_CLEANUP_FAILED',
+          'Schematic document is not open for cleanup');
+        Failed := True;
+      end;
     end else begin
-      CleanupCreatedObjects(Doc, DutUid, Journal, S);
+      CleanupOk := CleanupCreatedObjects(Doc, DutUid, Journal, S);
+      if not CleanupOk then Failed := True;
+      if D = Nil then begin
+        D := Client.GetDocumentByPath(DocPath);
+        if D <> Nil then Client.ShowDocument(D);
+      end;
       if D <> Nil then begin
-        if D.DoFileSave('') then S.Add('schematic_saved_after_cleanup=1')
-        else S.Add('schematic_saved_after_cleanup=0');
+        if D.DoFileSave('') then
+          S.Add('schematic_saved_after_cleanup=1')
+        else begin
+          S.Add('schematic_saved_after_cleanup=0');
+          S.Add('stage_schematic_cleanup=FAIL');
+          S.Add('cleanup_error=SCHEMATIC_CLEANUP_FAILED');
+          Failed := True;
+        end;
+      end else begin
+        S.Add('schematic_saved_after_cleanup=0');
+        S.Add('stage_schematic_cleanup=FAIL');
+        S.Add('cleanup_error=SCHEMATIC_CLEANUP_FAILED');
+        Failed := True;
       end;
     end;
   except
+    CleanupOk := False;
+    Failed := True;
     S.Add('stage_schematic_cleanup=FAIL');
     S.Add('cleanup_error=SCHEMATIC_CLEANUP_FAILED');
+    S.Add('schematic_saved_after_cleanup=0');
   end;
 
-  if Failed then S.Add('script_failed=1') else S.Add('script_failed=0');
-  S.Add('STATUS=OK');
+  if Failed then begin
+    S.Add('script_failed=1');
+    S.Add('STATUS=ERROR');
+  end else begin
+    S.Add('script_failed=0');
+    S.Add('STATUS=OK');
+  end;
   S.SaveToFile(RunDir + '\status.txt');
   S.Free;
   Journal.Free;

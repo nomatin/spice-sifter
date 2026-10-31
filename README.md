@@ -16,7 +16,7 @@
 ```json
 {
   "name": "dblib_resistor_r0009",
-  "component": {"library": "MY_LIB.DbLib", "page": "Резисторы", "id": "R0009"},
+  "component": {"library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib", "page": "Резисторы", "id": "R0009"},
   "fixture": "resistor_dc",
   "checks": [{"analysis": "op", "signal": "v(dut_p)", "measurement": "first", "min": -1.06, "max": -0.94}]
 }
@@ -26,7 +26,7 @@
 python spice_sifter.py examples/dblib_resistor_r0009.json
 ```
 
-Для DbLib-режима доступны `fixture`: `resistor_dc`, `diode_forward`, `diode_reverse`. Библиотека задаётся коротким именем установленной DbLib или полным путём к `.DbLib`. Рабочие файлы каждого запуска остаются в `temp/dblib_runs/<run_id>/`; исходный шаблон не изменяется.
+`component.library` должен быть **полным абсолютным путём** к существующему файлу `.DbLib`; путь в примере демонстрационный, замените его на локальный. Автоматического поиска библиотеки по имени нет. Для DbLib-режима доступны `fixture`: `resistor_dc`, `diode_forward`, `diode_reverse`. Рабочие файлы каждого запуска остаются в `temp/dblib_runs/<run_id>/`; исходный шаблон не изменяется. Ошибки очистки или сохранения очищенного SchDoc переводят результат в `ERROR`.
 
 ## Требования
 
@@ -56,6 +56,8 @@ Altium должен быть запущен и доступен. Одновре�
 - [Автоматические измерения](wiki/MEASUREMENTS.md)
 - [Готовые примеры тестов](examples/)
 - [История изменений](CHANGELOG.md)
+
+Тестовые скрипты находятся в `tests/`; все генерируемые файлы испытаний — в `temp/` (исключён из Git).
 
 ## License / Лицензия
 

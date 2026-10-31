@@ -1,7 +1,7 @@
 {
   "name": "dblib_diode_vd0001_reverse",
   "component": {
-    "library": "MY_LIB.DbLib",
+    "library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib",
     "page": "Диоды",
     "id": "VD0001"
   },

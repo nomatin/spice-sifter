@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 nomatin
 # SPDX-License-Identifier: GPL-3.0-only
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +31,8 @@ def all_pass_status(**overrides):
     status = { "stage_" + name: "PASS" for name in dr.STAGES }
     status.update({
         "STATUS": "OK",
+        "script_failed": "0",
+        "schematic_saved_after_cleanup": "1",
         "database_keys": "R0009",
         "design_item_id": "R0009",
         "database_library_name": "MY_LIB.DbLib",
@@ -118,18 +119,28 @@ class LibraryTests(unittest.TestCase):
             path.write_bytes("[Table1]\nTableName=Резисторы$\n[Table2]\nTableName=Диоды$\n".encode("cp1251"))
             self.assertEqual(dr.library_tables(path), ["Резисторы$", "Диоды$"])
 
-    def test_resolve_short_and_full_name(self):
+    def test_resolve_requires_absolute_existing_dblib(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td) / "Altium"
-            target = root / "MY_TEST" / "MY_TEST" / "MY_TEST.DbLib"
+            target = Path(td) / "MY_TEST" / "MY_TEST" / "MY_TEST.DbLib"
             target.parent.mkdir(parents=True)
             target.write_text("", encoding="ascii")
-            with patch.dict(os.environ, {"SPICE_SIFTER_LIB_ROOT": str(root)}):
-                self.assertEqual(dr.resolve_library("MY_TEST.DbLib"), target.resolve())
-                self.assertEqual(dr.resolve_library(str(target)), target.resolve())
-                with self.assertRaises(dr.DblibError) as ctx:
-                    dr.resolve_library("NO_SUCH.DbLib")
-                self.assertEqual(ctx.exception.code, "LIBRARY_NOT_FOUND")
+            self.assertEqual(dr.resolve_library(str(target)), target.resolve())
+            for value in ("MY_TEST.DbLib", "libraries/MY_TEST.DbLib"):
+                with self.subTest(value=value), self.assertRaises(dr.DblibError) as ctx:
+                    dr.resolve_library(value)
+                self.assertEqual(ctx.exception.code, "LIBRARY_PATH_INVALID")
+                self.assertEqual(
+                    ctx.exception.message,
+                    "component.library must be an absolute path to a .DbLib file",
+                )
+            other = Path(td) / "library.SVNDbLib"
+            other.write_text("", encoding="ascii")
+            with self.assertRaises(dr.DblibError) as ctx:
+                dr.resolve_library(str(other))
+            self.assertEqual(ctx.exception.code, "LIBRARY_PATH_INVALID")
+            with self.assertRaises(dr.DblibError) as ctx:
+                dr.resolve_library(str(Path(td) / "missing.DbLib"))
+            self.assertEqual(ctx.exception.code, "LIBRARY_NOT_FOUND")
 
     def test_preflight_unknown_page(self):
         with tempfile.TemporaryDirectory() as td:
@@ -208,15 +219,107 @@ class NetlistTests(unittest.TestCase):
 
 
 class ReportGuardTests(unittest.TestCase):
-    def test_duplicate_charts_are_collapsed(self):
-        waves = [SDFWave("v(dut_p)", "V", "General", 1, [0], [-1.0])]
+    def wave(self, name="v(dut_p)", unit="V", x=(0,), y=(-1.0,), complex_data=False):
+        return SDFWave(name, unit, "General", len(x), list(x), list(y), complex_data)
+
+    def test_identical_duplicate_charts_are_collapsed(self):
         doc = SDFDocument("1.0", [
-            SDFChart("Operating Point", list(waves)),
-            SDFChart("Operating Point", list(waves)),
-            SDFChart("Transient Analysis", list(waves)),
+            SDFChart("Operating Point", [self.wave()]),
+            SDFChart("Operating Point", [self.wave()]),
+            SDFChart("Transient Analysis", [self.wave()]),
         ])
         reduced = dr._normalized_document(doc)
         self.assertEqual([c.name for c in reduced.charts], ["Operating Point", "Transient Analysis"])
+
+    def test_conflicting_duplicate_charts_are_rejected(self):
+        cases = [
+            ("Y", [SDFChart("Operating Point", [self.wave(y=(-1.0,))]),
+                   SDFChart("Operating Point", [self.wave(y=(-2.0,))])]),
+            ("X", [SDFChart("Operating Point", [self.wave(x=(0,))]),
+                   SDFChart("Operating Point", [self.wave(x=(1,))])]),
+            ("unit", [SDFChart("Operating Point", [self.wave(unit="V")]),
+                      SDFChart("Operating Point", [self.wave(unit="mV")])]),
+            ("Y", [SDFChart("Operating Point", [self.wave(y=(-1 + 0j,), complex_data=True)]),
+                   SDFChart("Operating Point", [self.wave(y=(-1 + 1j,), complex_data=True)])]),
+        ]
+        for reason, charts in cases:
+            with self.subTest(reason=reason):
+                with self.assertRaises(dr.DblibError) as ctx:
+                    dr._normalized_document(SDFDocument("1.0", charts))
+                self.assertEqual(ctx.exception.code, "SDF_DUPLICATE_CONFLICT")
+                self.assertEqual(ctx.exception.message, "Duplicate SDF charts contain different data")
+                self.assertIn(reason, ctx.exception.diagnostics["reason"])
+
+    def test_different_analyses_and_signals_are_not_merged(self):
+        doc = SDFDocument("1.0", [
+            SDFChart("Operating Point", [self.wave(name="v(a)")]),
+            SDFChart("Operating Point", [self.wave(name="v(b)")]),
+            SDFChart("Transient Analysis", [self.wave(name="v(a)")]),
+        ])
+        reduced = dr._normalized_document(doc)
+        self.assertEqual(len(reduced.charts), 3)
+
+    def test_equivalent_complex_duplicates_are_collapsed(self):
+        zone = self.wave(y=(-1 + 2j,), complex_data=True)
+        doc = SDFDocument("1.0", [
+            SDFChart("AC Analysis", [zone]),
+            SDFChart("AC Analysis", [self.wave(y=(-1 + 2j,), complex_data=True)]),
+        ])
+        self.assertEqual(len(dr._normalized_document(doc).charts), 1)
+
+    def test_save_failure_is_not_pass(self):
+        status = all_pass_status(schematic_saved_after_cleanup="0")
+        error = dr._status_error(status, dr._stages(status))
+        self.assertEqual(error["code"], "SCHEMATIC_CLEANUP_FAILED")
+
+    def test_script_failed_is_not_pass(self):
+        status = all_pass_status(
+            script_failed="1", STATUS="ERROR",
+            error_code="SDF_NOT_SAVED", error_stage="simulation", error_message="no SDF",
+        )
+        error = dr._status_error(status, dr._stages(status))
+        self.assertEqual(error["code"], "SDF_NOT_SAVED")
+
+    def test_status_error_concrete_code_is_preserved(self):
+        status = all_pass_status(
+            STATUS="ERROR", script_failed="0",
+            error_code="SDF_NOT_SAVED", error_stage="simulation", error_message="no SDF",
+        )
+        error = dr._status_error(status, dr._stages(status))
+        self.assertEqual(error["code"], "SDF_NOT_SAVED")
+        self.assertEqual(error["stage"], "simulation")
+
+    def test_simulation_error_with_successful_cleanup(self):
+        status = all_pass_status(
+            stage_simulation="FAIL", script_failed="1", STATUS="ERROR",
+            error_code="SDF_NOT_SAVED", error_stage="simulation", error_message="no SDF",
+        )
+        error = dr._status_error(status, dr._stages(status))
+        self.assertEqual(error["code"], "SDF_NOT_SAVED")
+        self.assertEqual(error["stage"], "simulation")
+        self.assertEqual(status["schematic_saved_after_cleanup"], "1")
+
+    def test_simulation_and_cleanup_errors_are_both_reported(self):
+        status = all_pass_status(
+            stage_simulation="FAIL", stage_schematic_cleanup="FAIL",
+            script_failed="1", STATUS="ERROR",
+            error_code="SDF_NOT_SAVED", error_stage="simulation", error_message="no SDF",
+            cleanup_error="SCHEMATIC_CLEANUP_FAILED", schematic_saved_after_cleanup="0",
+        )
+        error = dr._status_error(status, dr._stages(status))
+        self.assertEqual(error["code"], "SDF_NOT_SAVED")
+        self.assertEqual(error["diagnostics"]["cleanup_error"], "SCHEMATIC_CLEANUP_FAILED")
+
+    def test_open_error_is_not_masked_by_cleanup(self):
+        status = all_pass_status(
+            stage_library_lookup="FAIL", stage_schematic_cleanup="NOT_APPLICABLE",
+            script_failed="1", STATUS="ERROR", schematic_saved_after_cleanup="0",
+            error_code="SCHEMATIC_NOT_OPENED", error_stage="library_lookup",
+            error_message="schematic not opened",
+        )
+        error = dr._status_error(status, dr._stages(status))
+        self.assertEqual(error["code"], "SCHEMATIC_NOT_OPENED")
+        self.assertEqual(error["stage"], "library_lookup")
 
     def test_missing_nsx_is_not_pass(self):
         with tempfile.TemporaryDirectory() as td:

@@ -9,7 +9,6 @@ template in dblib_resources/template is never modified.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -67,59 +66,22 @@ def pas_codes(value):
     return "".join(f"#{ord(c)}" for c in str(value))
 
 
-def _library_roots():
-    roots = []
-    env = os.environ.get("SPICE_SIFTER_LIB_ROOT", "")
-    roots.extend(Path(p) for p in env.split(os.pathsep) if p.strip())
-    home = Path.home()
-    roots.extend([
-        home / "Documents" / "Altium",
-        home / "Documents" / "Altium Designer",
-        Path.cwd(),
-    ])
-    seen = set()
-    result = []
-    for root in roots:
-        try:
-            key = str(root.resolve()).casefold()
-        except OSError:
-            continue
-        if key not in seen and root.is_dir():
-            seen.add(key)
-            result.append(root)
-    return result
-
-
 def resolve_library(name):
-    path = Path(name).expanduser()
-    if path.is_file():
-        return path.resolve()
-    if path.suffix.casefold() not in (".dblib", ".svndblib"):
+    """Accept only an absolute path to an existing .DbLib file. No searching."""
+    path = Path(str(name).strip())
+    if not path.is_absolute() or path.suffix.casefold() != ".dblib":
         raise DblibError(
             "library_lookup",
-            "LIBRARY_NAME_INVALID",
-            "library must be a .DbLib/.SVNDbLib name or a full path",
+            "LIBRARY_PATH_INVALID",
+            "component.library must be an absolute path to a .DbLib file",
         )
-    matches = []
-    for root in _library_roots():
-        matches.extend(root.rglob(path.name))
-    if not matches:
+    if not path.is_file():
         raise DblibError(
             "library_lookup",
             "LIBRARY_NOT_FOUND",
-            "installed library not found: " + str(name),
-            {"searched_roots": [str(r) for r in _library_roots()]},
+            "DbLib file not found: " + str(path),
         )
-
-    def rank(candidate):
-        stem = candidate.stem.casefold()
-        return (
-            candidate.parent.name.casefold() == stem,
-            candidate.parent.parent.name.casefold() == stem,
-            candidate.stat().st_mtime,
-        )
-
-    return max(matches, key=rank).resolve()
+    return path.resolve()
 
 
 def library_tables(path):
@@ -422,10 +384,35 @@ def _status_error(status, stages):
             code = status.get("error_code") or "DBLIB_" + name.upper() + "_FAILED"
             message = status.get("error_message") or ("stage failed: " + name)
             stage = status.get("error_stage") or name
+            diagnostics = {"status": status}
             if name == "schematic_cleanup":
-                code = "SCHEMATIC_CLEANUP_FAILED"
+                code = status.get("cleanup_error") or "SCHEMATIC_CLEANUP_FAILED"
                 message = status.get("error_message") or "schematic cleanup failed"
-            return _error(code, message, stage, {"status": status})
+                stage = "schematic_cleanup"
+            elif status.get("cleanup_error"):
+                diagnostics["cleanup_error"] = status["cleanup_error"]
+            return _error(code, message, stage, diagnostics)
+    if status.get("schematic_saved_after_cleanup") != "1":
+        return _error(
+            "SCHEMATIC_CLEANUP_FAILED",
+            "cleaned schematic was not saved",
+            "schematic_cleanup",
+            {"status": status},
+        )
+    if status.get("script_failed") == "1":
+        return _error(
+            status.get("error_code") or "ALTIUM_SCRIPT_FAILED",
+            status.get("error_message") or "Altium script reported a failure",
+            status.get("error_stage") or "altium",
+            {"status": status},
+        )
+    if status.get("STATUS") == "ERROR":
+        return _error(
+            status.get("error_code") or "ALTIUM_SCRIPT_ERROR",
+            status.get("error_message") or "Altium script reported an error",
+            status.get("error_stage") or "altium",
+            {"status": status},
+        )
     if status.get("STATUS") not in ("OK", None):
         return _error("ALTIUM_SCRIPT_ERROR", "Altium script did not complete", "altium")
     return None
@@ -438,24 +425,92 @@ def _structural_failure(report, stages, error):
     return report
 
 
+def _chart_key(chart):
+    from spice_sifter import chart_analysis
+    analysis = chart_analysis(chart)
+    return (
+        analysis if analysis is not None else chart.name.casefold(),
+        tuple(sorted(w.name.casefold() for w in chart.waves)),
+    )
+
+
+def _values_differ(left, right):
+    if len(left) != len(right):
+        return True
+    for a, b in zip(left, right):
+        if isinstance(a, complex) or isinstance(b, complex):
+            if not isinstance(a, complex) or not isinstance(b, complex):
+                return True
+            if a.real != b.real or a.imag != b.imag:
+                return True
+        elif a != b:
+            return True
+    return False
+
+
+def _chart_difference(left, right):
+    from spice_sifter import chart_analysis
+    if chart_analysis(left) != chart_analysis(right):
+        return "analysis differs"
+    lw = {w.name.casefold(): w for w in left.waves}
+    rw = {w.name.casefold(): w for w in right.waves}
+    if set(lw) != set(rw):
+        return "signal set differs"
+    for name in sorted(lw):
+        a, b = lw[name], rw[name]
+        if a.unit != b.unit:
+            return "signal %s: unit differs (%r != %r)" % (a.name, a.unit, b.unit)
+        if a.is_complex != b.is_complex:
+            return "signal %s: data type differs" % a.name
+        if a.signal_type != b.signal_type:
+            return "signal %s: signal type differs (%r != %r)" % (
+                a.name, a.signal_type, b.signal_type,
+            )
+        if a.point_count != b.point_count:
+            return "signal %s: point count differs (%d != %d)" % (
+                a.name, a.point_count, b.point_count,
+            )
+        if len(a.x) != len(b.x) or len(a.y) != len(b.y):
+            return "signal %s: array length differs" % a.name
+        if _values_differ(a.x, b.x):
+            return "signal %s: X differs" % a.name
+        if _values_differ(a.y, b.y):
+            return "signal %s: Y differs" % a.name
+    return None
+
+
 def _normalized_document(doc):
-    """Collapse duplicate chart setups produced by a project simulation.
+    """Collapse only truly identical duplicate chart setups.
 
     MixedSim can emit several identical charts for one analysis/signal set.
     The standalone validator rejects such ambiguity by design. For the DbLib
-    pipeline we keep the last chart of each group, which belongs to the current
-    run, and pass the reduced document to the existing validator unchanged.
+    pipeline we compare complete X/Y arrays, units, data types and point counts.
+    Identical charts collapse to the first one; any real difference is an error.
     """
-    from spice_sifter import SDFDocument, chart_analysis
+    from spice_sifter import SDFDocument
     groups = {}
+    charts = []
     for chart in doc.charts:
-        analysis = chart_analysis(chart)
-        key = (
-            analysis if analysis is not None else chart.name.casefold(),
-            tuple(sorted(w.name.casefold() for w in chart.waves)),
-        )
-        groups[key] = chart
-    return SDFDocument(doc.version, list(groups.values()), doc.metadata)
+        key = _chart_key(chart)
+        if key in groups:
+            first = groups[key]
+            reason = _chart_difference(first, chart)
+            if reason:
+                raise DblibError(
+                    "sdf_parsing",
+                    "SDF_DUPLICATE_CONFLICT",
+                    "Duplicate SDF charts contain different data",
+                    {
+                        "analysis": key[0],
+                        "signals": list(key[1]),
+                        "charts": [first.name, chart.name],
+                        "reason": reason,
+                    },
+                )
+        else:
+            groups[key] = chart
+            charts.append(chart)
+    return SDFDocument(doc.version, charts, doc.metadata)
 
 
 def build_report(report, data, run, status, start):
@@ -563,8 +618,14 @@ def build_report(report, data, run, status, start):
         return _structural_failure(
             report, stages, _error(exc.code, exc.message, "sdf_parsing")
         )
+    try:
+        doc = _normalized_document(doc)
+    except DblibError as exc:
+        stages["sdf_parsing"] = "FAIL"
+        return _structural_failure(
+            report, stages, _error(exc.code, exc.message, exc.stage, exc.diagnostics)
+        )
     stages["sdf_parsing"] = "PASS"
-    doc = _normalized_document(doc)
 
     outcome, rows = validate_document(doc, data.get("checks", []))
     stages["validation"] = outcome

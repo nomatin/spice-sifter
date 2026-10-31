@@ -43,22 +43,24 @@ python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\A
 ```json
 {
   "name": "dblib_resistor_r0009",
-  "component": {"library": "MY_LIB.DbLib", "page": "Резисторы", "id": "R0009"},
+  "component": {"library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib", "page": "Резисторы", "id": "R0009"},
   "fixture": "resistor_dc",
   "checks": [{"analysis": "op", "signal": "v(dut_p)", "measurement": "first", "min": -1.06, "max": -0.94}]
 }
 ```
 
-- `library` — короткое имя установленной библиотеки или полный путь к `.DbLib`. Короткое имя ищется в `SPICE_SIFTER_LIB_ROOT`, `Documents/Altium`, `Documents/Altium Designer` и текущем каталоге.
+- `library` — только полный абсолютный путь к существующему файлу `.DbLib`. Относительные пути, одно имя файла и автоматический поиск по каталогам не поддерживаются: возвращается `LIBRARY_PATH_INVALID`. Путь из примера демонстрационный, замените его на локальный.
 - `page` — имя страницы Excel. Символ `$` для таблицы DbLib добавляется автоматически, повторно не дублируется.
 - `id` — исходное значение ключевой колонки `ID`, а не Designator или MPN. Одновременно указывать `spice` и `component` запрещено.
 - `fixture` обязателен: `resistor_dc` (1 А, `.OP`), `diode_forward` (−10 мА) или `diode_reverse` (+10 мА). Первые два используются для положительных проверок; обратное включение диода с прямыми допусками даёт ожидаемый `FAIL`.
 
 Проверяются ровно два вывода, наличие SIM Implementation и Sim Port Map, совпадение ID/библиотеки/таблицы, связность цепей, сформированный Altium NSX и SDF текущего запуска. Проверки, `measurements` и `output.graphs` используют общий SDF-парсер, Validator и Measurement Engine. `sweep` и температурные серии в DbLib-режиме пока не поддерживаются и отклоняются до симуляции.
 
-Созданные DUT, Wire и Net Label удаляются по журналу после любого исхода; вкладки и документы Altium не закрываются. Рабочие файлы всегда остаются в `temp/dblib_runs/<run_id>/` (`report.json`, `status.txt`, NSX, SDF). Исходный шаблон `dblib_resources/template` не изменяется.
+Созданные DUT, Wire и Net Label удаляются по журналу после любого исхода; вкладки и документы Altium не закрываются. Успешная очистка требует подтверждённого удаления объектов, сохранения постоянных элементов схемы и успешного `DoFileSave()` очищенного SchDoc. Ошибка удаления или сохранения переводит результат в `ERROR` с `SCHEMATIC_CLEANUP_FAILED`; исходная ошибка симуляции при этом сохраняется в диагностике. Рабочие файлы всегда остаются в `temp/dblib_runs/<run_id>/` (`report.json`, `status.txt`, NSX, SDF). Исходный шаблон `dblib_resources/template` не изменяется.
 
-Отчёт дополнительно содержит `component`, `run_id`, `stages`, `artifacts` и `error`. Типовые коды ошибок: `LIBRARY_NOT_FOUND`, `PAGE_NOT_FOUND`, `COMPONENT_ID_NOT_FOUND`, `MISSING_SIMULATION_MODEL`, `SIM_PORT_MAP_MISSING`, `CONNECTIVITY_FAILED`, `NSX_NOT_GENERATED`, `NSX_INVALID`, `SDF_NOT_SAVED`, `SCHEMATIC_CLEANUP_FAILED`.
+Если MixedSim сформировал несколько графиков с одинаковым анализом и набором сигналов, они сравниваются полностью: имена, единицы, тип данных, количество точек, массивы X/Y и комплексные составляющие. Идентичные дубликаты схлопываются, а различающиеся дают `ERROR / SDF_DUPLICATE_CONFLICT`.
+
+Отчёт дополнительно содержит `component`, `run_id`, `stages`, `artifacts` и `error`. Типовые коды ошибок: `LIBRARY_PATH_INVALID`, `LIBRARY_NOT_FOUND`, `PAGE_NOT_FOUND`, `COMPONENT_ID_NOT_FOUND`, `MISSING_SIMULATION_MODEL`, `SIM_PORT_MAP_MISSING`, `CONNECTIVITY_FAILED`, `NSX_NOT_GENERATED`, `NSX_INVALID`, `SDF_NOT_SAVED`, `SDF_DUPLICATE_CONFLICT`, `SCHEMATIC_CLEANUP_FAILED`.
 
 ### Формат теста
 

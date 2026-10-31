@@ -27,4 +27,3 @@ Desktop.ini
 /tests/temperature_acceptance_report.json
 /tests/sweep_acceptance_report.json
 /tests/measurement_acceptance_report.json
-/tests/dblib_acceptance_report.json

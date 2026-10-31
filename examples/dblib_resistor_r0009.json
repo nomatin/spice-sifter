@@ -1,7 +1,7 @@
 {
   "name": "dblib_resistor_r0009",
   "component": {
-    "library": "MY_LIB.DbLib",
+    "library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib",
     "page": "Резисторы",
     "id": "R0009"
   },
