@@ -49,6 +49,35 @@ class MeasurementTests(unittest.TestCase):
  def test_sine_rms_nonuniform(self):
   x=[(j/5000)**1.3*2*math.pi for j in range(5001)];y=[3*math.sin(v) for v in x]
   self.assertAlmostEqual(measure_value(doc(x,y),m('rms'))[0],3/math.sqrt(2),places=5)
+ def test_rms_piecewise_linear_exact(self):
+  r=lambda x,y,**kw:measure_value(doc(x,y),m('rms',**kw))[0]
+  self.assertAlmostEqual(r([0,1,2],[5,5,5]),5)
+  self.assertAlmostEqual(r([0,1,2],[-5,-5,-5]),5)
+  self.assertAlmostEqual(r([0,1],[0,1]),1/math.sqrt(3))
+  self.assertAlmostEqual(r([0,1],[1,0]),1/math.sqrt(3))
+  self.assertAlmostEqual(r([0,1,2],[0,1,0]),1/math.sqrt(3))
+  x=[0,.5,2,5];y=[2*v+1 for v in x]
+  self.assertAlmostEqual(r(x,y),math.sqrt(((2*x[-1]+1)**3-(2*x[0]+1)**3)/(6*(x[-1]-x[0]))))
+ def test_rms_window_interpolates_boundaries(self):
+  x=[0,1,2,3,4]
+  value=measure_value(doc(x,x[:]),m('rms',window=dict(start=.5,stop=2.5)))[0]
+  self.assertAlmostEqual(value,math.sqrt((2.5**3-.5**3)/(3*(2.5-.5))))
+ def test_rms_dense_sine(self):
+  x=[j/10000 for j in range(10001)];y=[5*math.sin(2*math.pi*v) for v in x]
+  self.assertAlmostEqual(measure_value(doc(x,y),m('rms'))[0],5/math.sqrt(2),places=5)
+ def test_rms_errors(self):
+  for x,y in [([],[]),([0],[1]),([1,0],[0,1]),([0,1],[0,float('nan')]),([0,1],[0,float('inf')])]:
+   with self.subTest(x=x,y=y),self.assertRaises(TestError):measure_value(doc(x,y),m('rms'))
+  row=measurement_result(m('rms'),lambda:measure_value(doc([0,1],[0,float('nan')]),m('rms')))
+  self.assertEqual(row['status'],'ERROR')
+ def test_rms_ignores_graph_max_points(self):
+  from spice_sifter import export_graphs
+  x=[j/1000 for j in range(1001)];y=[math.sin(2*math.pi*v) for v in x];d=doc(x,y)
+  before=measure_value(d,m('rms'))[0]
+  graph=export_graphs(d,[dict(name='g',type='signal',signal='v(out)',components=['real'],max_points=7)])[0]
+  self.assertEqual(graph['points_returned'],7)
+  self.assertEqual(measure_value(d,m('rms'))[0],before)
+  self.assertAlmostEqual(before,1/math.sqrt(2),places=5)
  def test_ripple(self):
   self.assertEqual(measure_value(doc([0,1,2,3],[0,2,-2,0]),m('ripple',window=dict(start=1,stop=2)))[0],4)
  def test_settling(self):

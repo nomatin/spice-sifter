@@ -1110,10 +1110,12 @@ def measure_value(doc,r):
         if typ=='at':value=minterp(x,y,r['x'])
         else:
             if len(x)<2:merror('NOT_ENOUGH_POINTS','Need at least two distinct points')
-            if typ in ('mean','rms'):
-                vals=[v*v for v in y] if typ=='rms' else y
-                integral=math.fsum((b-a)*(u+v)/2 for a,b,u,v in zip(x,x[1:],vals,vals[1:]))/(x[-1]-x[0])
-                value=math.sqrt(max(0,integral)) if typ=='rms' else integral
+            if typ=='rms':
+                integral=math.fsum((x2-x1)*(y1*y1+y1*y2+y2*y2)/3 for x1,x2,y1,y2 in zip(x,x[1:],y,y[1:]))
+                value=math.sqrt(integral/(x[-1]-x[0]))
+            elif typ=='mean':
+                integral=math.fsum((b-a)*(u+v)/2 for a,b,u,v in zip(x,x[1:],y,y[1:]))/(x[-1]-x[0])
+                value=integral
             elif typ in ('peak_to_peak','ripple'):value=max(y)-min(y)
             elif typ=='crossing':value=mselect(mcrossings(x,y,r['level'],r.get('edge','either')),r.get('occurrence','first'));unit=xunit;markers={'x':value,'y':r['level']}
             elif typ in ('rise_time','fall_time'):
