@@ -9,8 +9,9 @@ venv/
 
 # Local probes, simulator output and machine-specific reports
 /diagnostics/
+/temp/
 /tests/acceptance_report.json
-/tests/dbur_acceptance_*/
+/tests/spice_sifter_acceptance_*/
 /tests/tmp*/
 *.log
 

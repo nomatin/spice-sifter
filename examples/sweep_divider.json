@@ -1,6 +1,6 @@
 {
   "name": "divider_parameter_sweep",
-  "spice": "* DBUR parameter sweep\nV1 in 0 DC {{VIN}}\nR1 in out {{RLOAD}}\nR2 out 0 1k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "spice": "* Spice Sifter parameter sweep\nV1 in 0 DC {{VIN}}\nR1 in out {{RLOAD}}\nR2 out 0 1k\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
   "sweep": {
     "parameters": {
       "VIN": {

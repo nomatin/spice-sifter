@@ -1,13 +1,13 @@
-# Устройство DBUR Test 0.5
+# Устройство Spice Sifter 0.5
 
-Публичный интерфейс — `python dbur_test.py test.json`. Инструкции и ограничения — в [руководстве пользователя](User-Guide.md). Результаты версии 0.4 — в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md), версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
+Публичный интерфейс — `python spice_sifter.py test.json`. Инструкции и ограничения — в [руководстве пользователя](User-Guide.md). Результаты версии 0.4 — в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md), версии 0.3 — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md), версии 0.2 — в [AC_VERIFICATION.md](AC_VERIFICATION.md); исторический отчёт MVP 1 — в [VERIFICATION.md](VERIFICATION.md).
 
 ## Поток данных
 
 1. Загрузка и проверка JSON, включая AC-проверки и запросы графиков.
 2. Подготовка NSX: сохранение исходных директив, подключение моделей после заголовка, добавление отсутствующего `.END`.
 3. Проверка основного процесса выбранного X2.EXE. Вспомогательные процессы `-R` не считаются открытым Altium.
-4. Файловая блокировка и отдельный `%TEMP%/DBUR-Test/<run_id>`.
+4. Файловая блокировка и отдельный `%TEMP%/SpiceSifter/<run_id>`.
 5. Генерация ASCII DelphiScript без BOM с процедурой RunTests; пути с Unicode представлены символьными литералами.
 6. Открытие свободного NSX и вызов `ADVSIM:RunSimulator`.
 7. Сохранение SDF текущего запуска, публикация статуса через временный файл и переименование.

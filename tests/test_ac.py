@@ -3,7 +3,7 @@ import math
 from pathlib import Path
 import struct
 import unittest
-from dbur_test import (SDFDocument,SDFChart,SDFWave,TestError,parse_sdf,parse_sdf_bytes,
+from spice_sifter import (SDFDocument,SDFChart,SDFWave,TestError,parse_sdf,parse_sdf_bytes,
  validate_document,export_graphs,validate_ac_request,validate_graph_requests,generate_nsx)
 
 

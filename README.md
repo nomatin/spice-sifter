@@ -1,4 +1,4 @@
-# DBUR Test 0.5
+# Spice Sifter 0.5
 
 Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim. Принимает JSON с испытательной схемой и условиями, выполняет моделирование и возвращает JSON-отчёт.
 
@@ -13,13 +13,13 @@ Windows 10/11, Python 3.11+ и установленный Altium Designer 24.4. 
 Откройте Altium Designer, закройте блокирующие диалоги и выполните из каталога проекта:
 
 ```powershell
-python dbur_test.py examples/divider.json
+python spice_sifter.py examples/divider.json
 ```
 
 При необходимости укажите путь к Altium и сохраните рабочие файлы:
 
 ```powershell
-python dbur_test.py examples/diode.json --altium "C:\Program Files\Altium\AD24\X2.EXE" --keep-files
+python spice_sifter.py examples/diode.json --altium "C:\Program Files\Altium\AD24\X2.EXE" --keep-files
 ```
 
 Результат выводится в stdout как JSON: `PASS` (код завершения 0), `FAIL` (1) или `ERROR` (2). Диагностика направляется в stderr.

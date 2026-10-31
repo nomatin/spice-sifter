@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
  results=[]
- with tempfile.TemporaryDirectory(prefix='dbur_acceptance_',dir=ROOT/'tests') as td:
+ with tempfile.TemporaryDirectory(prefix='spice_sifter_acceptance_',dir=ROOT/'tests') as td:
   folder=Path(td)
   divider=json.loads((ROOT/'examples/divider.json').read_text())
   cases=[]
@@ -26,7 +26,7 @@ def main():
   cases.append(('кириллица и пробелы',diode,'PASS',None))
   for name,data,expected,code in cases:
    path=folder/(name+'.json');path.write_text(json.dumps(data),encoding='utf-8')
-   run=subprocess.run([sys.executable,str(ROOT/'dbur_test.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=50)
+   run=subprocess.run([sys.executable,str(ROOT/'spice_sifter.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=50)
    report=json.loads(run.stdout)
    ok=(report['status']==expected and run.returncode=={'PASS':0,'FAIL':1,'ERROR':2}[expected] and (code is None or report['error']['code']==code))
    results.append(dict(case=name,passed=ok,exit=run.returncode,report=report))

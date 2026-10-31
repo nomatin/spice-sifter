@@ -1,4 +1,4 @@
-"""DBUR Test: input preparation and independent result validation.
+"""Spice Sifter: input preparation and independent result validation.
 Automatic measurements, parameter/temperature series, AC impedance and graph export.
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
@@ -480,7 +480,7 @@ def read_status(path):
 
 
 def run_altium(exe, data, base, timeout, keep, report, verbose=False):
-    root = Path(tempfile.gettempdir()) / 'DBUR-Test'
+    root = Path(tempfile.gettempdir()) / 'SpiceSifter'
     root.mkdir(exist_ok=True)
     guard=root/'pending-run.txt'
     import msvcrt
@@ -493,7 +493,7 @@ def run_altium(exe, data, base, timeout, keep, report, verbose=False):
         msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
     except OSError:
         lock.close()
-        raise TestError('BUSY','Another DBUR run holds the Altium lock')
+        raise TestError('BUSY','Another Spice Sifter run holds the Altium lock')
     if guard.exists():
         pending=Path(guard.read_text(encoding='utf-8'))
         previous=read_status(pending/'status.txt')
@@ -1227,7 +1227,7 @@ class JSONArgumentParser(argparse.ArgumentParser):
 def main():
     p = JSONArgumentParser()
     p.add_argument('test')
-    p.add_argument('--altium', default=os.environ.get('DBUR_ALTIUM'))
+    p.add_argument('--altium', default=os.environ.get('SPICE_SIFTER_ALTIUM'))
     p.add_argument('--timeout', type=float, default=120)
     p.add_argument('--keep-files', action='store_true')
     p.add_argument('--verbose', action='store_true')
@@ -1246,7 +1246,7 @@ def main():
                 if version.startswith('24.4.'):
                     args.altium=str(candidate)
         if not args.altium or not Path(args.altium).is_file():
-            raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or DBUR_ALTIUM to X2.EXE')
+            raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or SPICE_SIFTER_ALTIUM to X2.EXE')
         require_running_altium(args.altium)
         execute_test(args.altium,data,Path(args.test).resolve().parent,args.timeout,args.keep_files,args.verbose,report,args.max_runs)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:

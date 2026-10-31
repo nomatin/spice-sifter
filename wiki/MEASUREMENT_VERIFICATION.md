@@ -1,4 +1,4 @@
-# DBUR Test 0.5 — Automatic Measurements
+# Spice Sifter 0.5 — Automatic Measurements
 
 ## Среда и интеграция
 

@@ -1,5 +1,5 @@
 import unittest, struct
-from dbur_test import parse_sdf_bytes,TestError
+from spice_sifter import parse_sdf_bytes,TestError
 
 def fixture(charts=1, complex_flag='FALSE',n=2):
  b=f'SDF: 1.0\nTotalPoints: {4*charts}\n'.encode()

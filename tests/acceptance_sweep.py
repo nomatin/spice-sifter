@@ -3,11 +3,11 @@ import copy,json,math,subprocess,sys,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from dbur_test import parse_sdf
+from spice_sifter import parse_sdf
 
 def main():
  results=[]
- with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='dbur_acceptance_sweep_') as td:
+ with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='spice_sifter_acceptance_sweep_') as td:
   folder=Path(td);cases=[]
   for name,total in [('sweep_linear',6),('sweep_divider',6),('sweep_temperature',6),('sweep_ac',2),('sweep_transient',2),('sweep_op',2),('sweep_dc',2)]:
    cases.append((name,json.loads((ROOT/'examples'/(name+'.json')).read_text()),'PASS',total))
@@ -21,7 +21,7 @@ def main():
   cases.append(('unresolved',unresolved,'ERROR',0))
   for name,data,status,total in cases:
    path=folder/(name+'.json');path.write_text(json.dumps(data))
-   p=subprocess.run([sys.executable,str(ROOT/'dbur_test.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=max(50,total*45))
+   p=subprocess.run([sys.executable,str(ROOT/'spice_sifter.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=max(50,total*45))
    r=json.loads(p.stdout);ok=r['status']==status and p.returncode=={'PASS':0,'FAIL':1,'ERROR':2}[status]
    if total:
     runs=r.get('runs',[]);ok=ok and len(runs)==total and len({x['run_id'] for x in runs})==total

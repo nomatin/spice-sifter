@@ -1,1 +1,1 @@
-.model DBUR_DIODE D(Is=1e-14 N=1)
+.model SPICE_SIFTER_DIODE D(Is=1e-14 N=1)

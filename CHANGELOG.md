@@ -1,5 +1,10 @@
 # История изменений
 
+## Переименование проекта
+
+- Проект переименован в Spice Sifter: `dbur_test.py` → `spice_sifter.py`, `DBUR_ALTIUM` → `SPICE_SIFTER_ALTIUM`, `%TEMP%/DBUR-Test` → `%TEMP%/SpiceSifter`.
+- Функциональность версии 0.5 не изменена; обновлены документация, примеры и тесты.
+
 ## 0.5 — Automatic Measurements
 
 - Добавлен Measurement Engine над полными данными SDF, без повторного моделирования ради каждого измерения.

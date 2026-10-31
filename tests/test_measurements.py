@@ -1,6 +1,6 @@
 import math,unittest
 from pathlib import Path
-from dbur_test import (SDFDocument,SDFChart,SDFWave,measure_value,measurement_result,validate_measurements,
+from spice_sifter import (SDFDocument,SDFChart,SDFWave,measure_value,measurement_result,validate_measurements,
  mcurve,mcrossings,mwindow,finish_measurements,process_measurements,TestError)
 
 def doc(x,y,name='v(out)',analysis='Transient Analysis'):
@@ -110,12 +110,12 @@ class MeasurementTests(unittest.TestCase):
   for requests in [[m('mean'),m('rms')],[m('not_supported')]]:
    with self.assertRaises(TestError):validate_measurements(dict(spice='*t',measurements=requests))
  def test_real_transient_fixture(self):
-  from dbur_test import parse_sdf
+  from spice_sifter import parse_sdf
   d=parse_sdf(Path(__file__).parent/'fixtures/measurement_rc_ad24_4.sdf')
   value,unit,_=measure_value(d,m('rise_time',low=0,high=5,window=dict(start=.001,stop=.01)))
   self.assertAlmostEqual(value,.001*math.log(9),delta=1e-7);self.assertEqual(unit,'s')
  def test_real_resonance_fixture(self):
-  from dbur_test import parse_sdf
+  from spice_sifter import parse_sdf
   d=parse_sdf(Path(__file__).parent/'fixtures/measurement_rlc_ad24_4.sdf')
   value,unit,_=measure_value(d,ac('resonant_frequency'))
   self.assertAlmostEqual(value,1/(2*math.pi*math.sqrt(.001*1e-6)),delta=50);self.assertEqual(unit,'Hz')

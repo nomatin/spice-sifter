@@ -1,4 +1,4 @@
-# DBUR Test 0.3 — Temperature Testing
+# Spice Sifter 0.3 — Temperature Testing
 
 Отчёт этапа 0.3. Parameter Sweep и поддержка OP, добавленные в 0.4, описаны в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md).
 

@@ -4,7 +4,7 @@
 
 - Поддерживаются `.TRAN`, `.DC`, `.OP` и `.AC` (DEC/OCT/LIN). Импеданс рассчитывается для комплексных данных AC; `.OP` требует явной `.PLOT OP` для сохранения выбранных сигналов. Неизвестный формат SDF и амплитудные AC-данные без комплексных составляющих отклоняются.
 - Altium должен быть открыт, лицензирован и свободен от блокирующих диалогов. Утилита не запускает закрытый Altium: возвращает `ALTIUM_NOT_RUNNING`. Наличие процесса не гарантирует его отзывчивость.
-- Одновременные запуски DBUR запрещены. Не запускайте другую симуляцию вручную во время проверки.
+- Одновременные запуски Spice Sifter запрещены. Не запускайте другую симуляцию вручную во время проверки.
 - Кириллические пути моделей требуют доступных коротких имён Windows; иначе используйте путь ASCII. Вложенные относительные `.include` и кириллические директивы внутри `spice` отдельно не проверены.
 - Полный текст сообщений панели MixedSim не экспортируется; при ошибках сохраняются доступные диагностические файлы.
 - При тайм-ауте Altium не завершается. Незавершённый запуск блокирует следующие проверки до завершения или ручной проверки состояния.
@@ -16,14 +16,14 @@
 3. Выполните тест:
 
 ```powershell
-python dbur_test.py examples/divider.json
-python dbur_test.py examples/diode.json --keep-files
+python spice_sifter.py examples/divider.json
+python spice_sifter.py examples/diode.json --keep-files
 ```
 
-Путь к Altium определяется из `--altium`, затем `DBUR_ALTIUM`. Без них проверяется стандартный `Program Files/Altium/AD24/X2.EXE` с версией 24.4.
+Путь к Altium определяется из `--altium`, затем `SPICE_SIFTER_ALTIUM`. Без них проверяется стандартный `Program Files/Altium/AD24/X2.EXE` с версией 24.4.
 
 ```powershell
-python dbur_test.py examples/divider.json --altium "C:\Program Files\Altium\AD24\X2.EXE" --timeout 120 --verbose
+python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\AD24\X2.EXE" --timeout 120 --verbose
 ```
 
 Параметры:
@@ -57,10 +57,10 @@ python dbur_test.py examples/divider.json --altium "C:\Program Files\Altium\AD24
 Примеры:
 
 ```powershell
-python dbur_test.py examples/ac_resistor.json
-python dbur_test.py examples/ac_capacitor.json
-python dbur_test.py examples/ac_inductor.json
-python dbur_test.py examples/ac_rc.json
+python spice_sifter.py examples/ac_resistor.json
+python spice_sifter.py examples/ac_capacitor.json
+python spice_sifter.py examples/ac_inductor.json
+python spice_sifter.py examples/ac_rc.json
 ```
 
 В `spice` задайте источник с `AC 1`, директиву `.AC` и `.PLOT AC` для напряжения и тока. Частотная сетка берётся из исходного SPICE без изменений. В примерах ток измеряется нулевым источником `VSENSE`; его имя в SDF — `i(vsense)` (регистр не важен).
@@ -121,13 +121,13 @@ AC-проверка:
 Одиночная температура задаётся в SPICE директивой `.TEMP 25` (регистр не важен; разрешены отрицательные и дробные значения). Для серии добавьте верхнеуровневое поле `"temperatures_c": [-40, 25, 85]`. В серии исходный SPICE не должен содержать `.TEMP` или `.OPTIONS TEMP`.
 
 ```powershell
-python dbur_test.py examples/temperature_single.json
-python dbur_test.py examples/temperature_series.json --keep-files
-python dbur_test.py examples/temperature_ac.json
-python dbur_test.py examples/temperature_graphs.json
+python spice_sifter.py examples/temperature_single.json
+python spice_sifter.py examples/temperature_series.json --keep-files
+python spice_sifter.py examples/temperature_ac.json
+python spice_sifter.py examples/temperature_graphs.json
 ```
 
-**Особенность MixedSim 24.4:** в самостоятельном NSX прямая `.TEMP` не изменила характеристики проверенного диода. Подтверждённая альтернатива — `.OPTIONS TEMP=<значение>`. DBUR принимает `.TEMP` во входе и преобразует её в `.OPTIONS TEMP` только в рабочем NSX; в отчёте указывает `temperature_method: "OPTIONS TEMP"`. Исходные тесты и модели не изменяются.
+**Особенность MixedSim 24.4:** в самостоятельном NSX прямая `.TEMP` не изменила характеристики проверенного диода. Подтверждённая альтернатива — `.OPTIONS TEMP=<значение>`. Spice Sifter принимает `.TEMP` во входе и преобразует её в `.OPTIONS TEMP` только в рабочем NSX; в отчёте указывает `temperature_method: "OPTIONS TEMP"`. Исходные тесты и модели не изменяются.
 
 Температуры задаются в °C, должны быть конечными и выше −273,15 °C. Пустые списки, дубликаты, несколько активных `.TEMP`, несколько значений на директиву, вложенная `.TEMP` и конфликт с `.OPTIONS TEMP` отклоняются до запуска. Комментарии не считаются активными директивами. `TNOM` и локальные температурные параметры моделей не изменяются. Одинаковые результаты при разных температурах сами по себе не являются ошибкой: модель может не иметь температурной зависимости.
 
@@ -164,13 +164,13 @@ python dbur_test.py examples/temperature_graphs.json
 ```
 
 ```powershell
-python dbur_test.py examples/sweep_linear.json
-python dbur_test.py examples/sweep_divider.json --keep-files
-python dbur_test.py examples/sweep_temperature.json
-python dbur_test.py examples/sweep_ac.json
-python dbur_test.py examples/sweep_transient.json
-python dbur_test.py examples/sweep_op.json
-python dbur_test.py examples/sweep_dc.json
+python spice_sifter.py examples/sweep_linear.json
+python spice_sifter.py examples/sweep_divider.json --keep-files
+python spice_sifter.py examples/sweep_temperature.json
+python spice_sifter.py examples/sweep_ac.json
+python spice_sifter.py examples/sweep_transient.json
+python spice_sifter.py examples/sweep_op.json
+python spice_sifter.py examples/sweep_dc.json
 ```
 
 Для параметра задаётся либо `values`, либо `start`, `stop`, `step`. Например, `{"start": 0, "stop": 5, "step": 0.5}` даёт 11 значений. Допускаются отрицательные значения и отрицательный шаг. Шаг не равен нулю и направлен к stop; конечная точка включается только при попадании на сетку. Сетка строится через Decimal без накопления ошибок сложения float.
@@ -204,10 +204,10 @@ NSX и SDF автоматически **не закрываются**; вкла�
 Это раздел основного JSON, а не отдельный входной файл. id уникален, limits необязателен; checks: [] допустим при наличии измерений. Статусы измерений — MEASURED без допусков, PASS/FAIL с допусками, ERROR при невозможности расчёта. Общий статус учитывает измерения; существующие checks/runs/summary не переписываются.
 
 ```powershell
-python dbur_test.py examples/measure_transient.json
-python dbur_test.py examples/measure_cutoff.json
-python dbur_test.py examples/measure_resonance.json
-python dbur_test.py examples/measure_mosfet.json --keep-files
+python spice_sifter.py examples/measure_transient.json
+python spice_sifter.py examples/measure_cutoff.json
+python spice_sifter.py examples/measure_resonance.json
+python spice_sifter.py examples/measure_mosfet.json --keep-files
 ```
 
 Доступны at, crossing, mean, rms, peak_to_peak/ripple, rise_time, fall_time, delay, settling_time, cutoff_3db, resonant_frequency, capacitance_series, inductance_series, esr, sweep_crossing и rds_on. Работают when и temperature_c; семейства разных температур не смешиваются. Расчёты используют полные массивы до max_points. При запросе markers возвращаются диагностические координаты, без изображений.
@@ -220,9 +220,9 @@ python dbur_test.py examples/measure_mosfet.json --keep-files
 
 stdout содержит только один компактный JSON. Статусы и коды завершения: `PASS` — 0, `FAIL` — 1, `ERROR` — 2. Диагностика направляется в stderr. При сохранении артефактов отчёт содержит `artifacts` и `diagnostics`.
 
-Рабочие файлы находятся в `%TEMP%/DBUR-Test/<run_id>`. По умолчанию после чтения результата они удаляются; при ошибке выполнения сохраняются. Если скрипт не начал работу до истечения времени, возвращается `SCRIPT_NOT_EXECUTED`; если начал, но не завершился — `TIMEOUT`.
+Рабочие файлы находятся в `%TEMP%/SpiceSifter/<run_id>`. По умолчанию после чтения результата они удаляются; при ошибке выполнения сохраняются. Если скрипт не начал работу до истечения времени, возвращается `SCRIPT_NOT_EXECUTED`; если начал, но не завершился — `TIMEOUT`.
 
-Если следующий запуск возвращает `BUSY` после тайм-аута, дождитесь завершения предыдущего. Если он так и не завершился, вручную убедитесь, что симуляция в Altium больше не выполняется, затем удалите `%TEMP%/DBUR-Test/pending-run.txt`.
+Если следующий запуск возвращает `BUSY` после тайм-аута, дождитесь завершения предыдущего. Если он так и не завершился, вручную убедитесь, что симуляция в Altium больше не выполняется, затем удалите `%TEMP%/SpiceSifter/pending-run.txt`.
 
 ### Проверка установки
 

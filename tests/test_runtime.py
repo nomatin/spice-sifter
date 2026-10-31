@@ -1,7 +1,7 @@
 import json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-from dbur_test import run_altium,load_test,TestError,parse_sdf
+from spice_sifter import run_altium,load_test,TestError,parse_sdf
 class RuntimeTests(unittest.TestCase):
  def test_real_fixture(self):
   d=parse_sdf('tests/fixtures/divider_ad24_4.sdf')
@@ -14,9 +14,9 @@ class RuntimeTests(unittest.TestCase):
    with self.assertRaises(TestError) as c:load_test(p)
    self.assertEqual(c.exception.code,'INPUT_INVALID')
  def test_timeout_and_busy(self):
-  with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as td, patch('dbur_test.tempfile.gettempdir',return_value=td),patch('dbur_test.subprocess.Popen') as launch:
+  with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as td, patch('spice_sifter.tempfile.gettempdir',return_value=td),patch('spice_sifter.subprocess.Popen') as launch:
    def mark_started(*args,**kwargs):
-    work=next((Path(td)/'DBUR-Test').glob('*/run_*.pas')).parent
+    work=next((Path(td)/'SpiceSifter').glob('*/run_*.pas')).parent
     (work/'started.txt').write_text('STARTED')
    launch.side_effect=mark_started
    data=load_test('examples/divider.json');report={}
@@ -31,23 +31,23 @@ class RuntimeTests(unittest.TestCase):
 class RunningAltiumTests(unittest.TestCase):
  def query(self, processes):
   from types import SimpleNamespace
-  return patch('dbur_test.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(processes)))
+  return patch('spice_sifter.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(processes)))
  def test_absent_and_launcher_are_rejected(self):
-  from dbur_test import require_running_altium
+  from spice_sifter import require_running_altium
   for processes in [[],[{'ExecutablePath':'X2.EXE','CommandLine':'X2.EXE -RScriptingSystem:RunScriptFile(...)'}],[{'ExecutablePath':'other/X2.EXE','CommandLine':'X2.EXE'}]]:
    with self.subTest(processes=processes),self.query(processes):
     with self.assertRaises(TestError) as c:require_running_altium('X2.EXE')
     self.assertEqual(c.exception.code,'ALTIUM_NOT_RUNNING')
  def test_running(self):
-  from dbur_test import require_running_altium
+  from spice_sifter import require_running_altium
   with self.query({'ExecutablePath':'X2.EXE','CommandLine':'"X2.EXE"'}):
    require_running_altium('X2.EXE')
  def test_cli_does_not_launch_when_closed(self):
   import io
   from contextlib import redirect_stdout
-  from dbur_test import main
+  from spice_sifter import main
   output=io.StringIO()
-  with patch('sys.argv',['dbur_test.py','examples/divider.json','--altium',str(Path('dbur_test.py').resolve())]),self.query([]),patch('dbur_test.run_altium') as runner,redirect_stdout(output):
+  with patch('sys.argv',['spice_sifter.py','examples/divider.json','--altium',str(Path('spice_sifter.py').resolve())]),self.query([]),patch('spice_sifter.run_altium') as runner,redirect_stdout(output):
    self.assertEqual(main(),2)
   runner.assert_not_called()
   self.assertEqual(json.loads(output.getvalue())['error']['code'],'ALTIUM_NOT_RUNNING')

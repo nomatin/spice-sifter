@@ -3,7 +3,7 @@
   "models": [
     "models/diode.lib"
   ],
-  "spice": "* Diode forward bias\nV1 in 0 DC 5\nR1 in out 1k\nD1 out 0 DBUR_DIODE\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
+  "spice": "* Diode forward bias\nV1 in 0 DC 5\nR1 in out 1k\nD1 out 0 SPICE_SIFTER_DIODE\n.TRAN 1u 1m\n.PLOT TRAN V(out)\n.END",
   "checks": [
     {
       "signal": "v(out)",

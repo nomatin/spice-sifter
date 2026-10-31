@@ -1,6 +1,6 @@
-# DBUR Test Wiki
+# Spice Sifter Wiki
 
-Подробная документация DBUR Test 0.5.
+Подробная документация Spice Sifter 0.5.
 
 - [Руководство пользователя](User-Guide.md): параметры запуска, формат JSON, AC, графики, температуры, Parameter Sweep и ошибки.
 - [Автоматические измерения: формат и алгоритмы](MEASUREMENTS.md)

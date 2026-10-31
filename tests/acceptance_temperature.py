@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def main():
  results=[]
- with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='dbur_acceptance_temp_') as td:
+ with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='spice_sifter_acceptance_temp_') as td:
   folder=Path(td)
   cases=[]
   for name in ['temperature_single','temperature_series','temperature_ac','temperature_graphs']:
@@ -22,7 +22,7 @@ def main():
   cases.append(('graphs_without_checks',no_checks,'PASS'))
   for name,data,status in cases:
    path=folder/(name+'.json');path.write_text(json.dumps(data))
-   p=subprocess.run([sys.executable,str(ROOT/'dbur_test.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=150)
+   p=subprocess.run([sys.executable,str(ROOT/'spice_sifter.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=150)
    report=json.loads(p.stdout);ok=report['status']==status and p.returncode=={'PASS':0,'FAIL':1,'ERROR':2}[status]
    runs=report.get('runs',[report]);temps=data.get('temperatures_c',[25])
    ok=ok and [r['temperature_c'] for r in runs]==temps and len({r['run_id'] for r in runs})==len(runs)

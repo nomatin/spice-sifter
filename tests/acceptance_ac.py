@@ -6,12 +6,12 @@ import sys
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from dbur_test import parse_sdf,export_graphs
+from spice_sifter import parse_sdf,export_graphs
 
 
 def main():
  results=[]
- with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='dbur_acceptance_ac_') as td:
+ with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='spice_sifter_acceptance_ac_') as td:
   folder=Path(td)
   cases=[]
   for name in ['ac_resistor','ac_capacitor','ac_inductor','ac_rc','ac_graph_full','ac_graph_limited']:
@@ -28,7 +28,7 @@ def main():
   cases.append(('dc_graph',dc,'PASS'))
   for name,data,status in cases:
    path=folder/(name+'.json');path.write_text(json.dumps(data))
-   run=subprocess.run([sys.executable,str(ROOT/'dbur_test.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=50)
+   run=subprocess.run([sys.executable,str(ROOT/'spice_sifter.py'),str(path),'--timeout','30','--keep-files',*sys.argv[1:]],capture_output=True,text=True,timeout=50)
    report=json.loads(run.stdout)
    ok=report['status']==status and run.returncode=={'PASS':0,'FAIL':1,'ERROR':2}[status]
    requested=data.get('output',{}).get('graphs')

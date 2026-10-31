@@ -32,10 +32,10 @@ def main():
  output=ROOT/'tests/measurement_acceptance_report.json'
  previous=json.loads(output.read_text()) if output.exists() else []
  results={r['case']:r for r in previous}
- with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='dbur_acceptance_measurement_') as td:
+ with tempfile.TemporaryDirectory(dir=ROOT/'tests',prefix='spice_sifter_acceptance_measurement_') as td:
   for name,(data,status) in chosen.items():
    path=Path(td)/(name+'.json');path.write_text(json.dumps(data))
-   p=subprocess.run([sys.executable,str(ROOT/'dbur_test.py'),str(path),'--timeout','30','--keep-files',*extra],capture_output=True,text=True,timeout=1200)
+   p=subprocess.run([sys.executable,str(ROOT/'spice_sifter.py'),str(path),'--timeout','30','--keep-files',*extra],capture_output=True,text=True,timeout=1200)
    r=json.loads(p.stdout);ok=verify(name,r,p.returncode,status)
    results[name]=dict(case=name,passed=ok,exit=p.returncode,report=r);print(name,'OK' if ok else 'FAILED',flush=True)
  output.write_text(json.dumps(list(results.values()),indent=2),encoding='utf-8')

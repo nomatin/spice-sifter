@@ -1,4 +1,4 @@
-# DBUR Test 0.4 — Parameter Sweep
+# Spice Sifter 0.4 — Parameter Sweep
 
 ## Реализация
 

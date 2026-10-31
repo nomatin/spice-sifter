@@ -1,7 +1,7 @@
 import copy,json,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
-from dbur_test import (temperature_plan,generate_nsx,TemperatureInputError,execute_test,
+from spice_sifter import (temperature_plan,generate_nsx,TemperatureInputError,execute_test,
  TestError,load_test,parse_sdf)
 ROOT=Path(__file__).resolve().parents[1]
 def data():return json.loads((ROOT/'examples/temperature_series.json').read_text())
@@ -52,7 +52,7 @@ class TemperatureTests(unittest.TestCase):
    if t==25:raise TestError('SIM_NOT_RUN','specific simulator diagnostic')
    report['simulation_status']='PASS';return 'PASS',[dict(variant['checks'][0],value=.7,passed=True)]
   report={}
-  with patch('dbur_test.run_altium',side_effect=runner),patch('dbur_test.require_running_altium'):
+  with patch('spice_sifter.run_altium',side_effect=runner),patch('spice_sifter.require_running_altium'):
    execute_test('X2',d,ROOT,30,False,False,report)
   self.assertEqual(seen,[-40,25,85]);self.assertEqual(report['status'],'ERROR')
   self.assertEqual([r['status'] for r in report['runs']],['PASS','ERROR','PASS'])
@@ -66,13 +66,13 @@ class TemperatureTests(unittest.TestCase):
    if variant['output']['graphs']:report['graphs']=[dict(name='v',x=[0,1],real=[.7,.7])]
    return ('FAIL',[dict(passed=False)]) if variant['checks'] else ('PASS',[])
   r={}
-  with patch('dbur_test.run_altium',side_effect=runner),patch('dbur_test.require_running_altium'):execute_test('X2',d,ROOT,30,False,False,r)
+  with patch('spice_sifter.run_altium',side_effect=runner),patch('spice_sifter.require_running_altium'):execute_test('X2',d,ROOT,30,False,False,r)
   self.assertEqual(r['status'],'FAIL');self.assertEqual(r['summary'],dict(total=3,passed=2,failed=1,errors=0))
   self.assertEqual(r['runs'][0]['checks_status'],'NOT_CONFIGURED')
   self.assertNotIn('graphs',r['runs'][1]);self.assertEqual(r['runs'][2]['graphs'][0]['temperature_c'],85)
  def test_single_output(self):
   d=json.loads((ROOT/'examples/temperature_single.json').read_text());r={}
-  with patch('dbur_test.run_altium',return_value=('PASS',[])),patch('dbur_test.require_running_altium'):execute_test('X2',d,ROOT,30,False,False,r)
+  with patch('spice_sifter.run_altium',return_value=('PASS',[])),patch('spice_sifter.require_running_altium'):execute_test('X2',d,ROOT,30,False,False,r)
   self.assertEqual(r['temperature_c'],25);self.assertNotIn('runs',r)
  def test_loader_temperature_graphs_only(self):
   d=data();d['checks']=[]

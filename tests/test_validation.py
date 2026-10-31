@@ -1,6 +1,6 @@
 import unittest
 from pathlib import Path
-from dbur_test import load_test, validate, generate_nsx
+from spice_sifter import load_test, validate, generate_nsx
 class ValidationTests(unittest.TestCase):
  def test_example(self):
   self.assertEqual(load_test('examples/divider.json')['name'],'voltage_divider')
