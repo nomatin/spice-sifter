@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 """Opt-in acceptance checks against an already running Altium 24.4."""
 import json
 from pathlib import Path

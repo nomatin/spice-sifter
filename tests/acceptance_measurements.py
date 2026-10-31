@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 """Opt-in real MixedSim automatic-measurement acceptance."""
 import argparse,copy,json,subprocess,sys,tempfile
 from pathlib import Path

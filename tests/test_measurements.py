@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 import math,unittest
 from pathlib import Path
 from spice_sifter import (SDFDocument,SDFChart,SDFWave,measure_value,measurement_result,validate_measurements,

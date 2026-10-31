@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 """Spice Sifter: input preparation and independent result validation.
 Automatic measurements, parameter/temperature series, AC impedance and graph export.
 Validated against Altium Designer 24.4.1.13 on Windows.

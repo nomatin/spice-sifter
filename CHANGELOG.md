@@ -1,5 +1,9 @@
 # История изменений
 
+## Невыпущенные изменения
+
+- Добавлена лицензия GNU GPL-3.0-only: файл `LICENSE`, SPDX-заголовки в собственных Python-файлах и раздел «License / Лицензия» в README.
+
 ## Переименование проекта
 
 - Проект переименован в Spice Sifter: `dbur_test.py` → `spice_sifter.py`, `DBUR_ALTIUM` → `SPICE_SIFTER_ALTIUM`, `%TEMP%/DBUR-Test` → `%TEMP%/SpiceSifter`.

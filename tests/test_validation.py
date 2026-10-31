@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 import unittest
 from pathlib import Path
 from spice_sifter import load_test, validate, generate_nsx

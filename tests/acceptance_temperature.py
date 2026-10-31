@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 """Temperature acceptance against an already opened Altium Designer 24.4."""
 import copy,json,re,subprocess,sys,tempfile
 from pathlib import Path

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 import copy,json,tempfile,unittest
 from decimal import Decimal
 from pathlib import Path

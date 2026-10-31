@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 import unittest, struct
 from spice_sifter import parse_sdf_bytes,TestError
 

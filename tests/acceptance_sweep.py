@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 nomatin
+# SPDX-License-Identifier: GPL-3.0-only
 """Opt-in Parameter Sweep acceptance against an open Altium 24.4."""
 import copy,json,math,subprocess,sys,tempfile
 from pathlib import Path
