@@ -731,6 +731,96 @@ def _apply_status(report, results, expected, problems, plan_unknown=False):
     return status
 
 
+def _sanitize_json(value, path="report", problems=None):
+    """Return a JSON-safe copy; NaN/Infinity become null recursively.
+
+    Unsupported Python types are not stringified: they are replaced with null
+    and recorded as an explicit serialization problem.
+    """
+    if problems is None:
+        problems = []
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (list, tuple)):
+        return [
+            _sanitize_json(item, "%s[%d]" % (path, index), problems)
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if isinstance(key, str):
+                safe_key = key
+            elif isinstance(key, bool) or key is None or isinstance(key, int):
+                safe_key = key
+            elif isinstance(key, float):
+                if not math.isfinite(key):
+                    problems.append(
+                        {
+                            "code": "REPORT_SERIALIZATION_INVALID",
+                            "message": "Non-finite dictionary key",
+                            "path": path,
+                        }
+                    )
+                    continue
+                safe_key = key
+            else:
+                problems.append(
+                    {
+                        "code": "REPORT_SERIALIZATION_INVALID",
+                        "message": "Unsupported dictionary key type: " + type(key).__name__,
+                        "path": path,
+                    }
+                )
+                continue
+            result[safe_key] = _sanitize_json(
+                item, "%s.%s" % (path, safe_key), problems
+            )
+        return result
+    problems.append(
+        {
+            "code": "REPORT_SERIALIZATION_INVALID",
+            "message": "Unsupported value type: " + type(value).__name__,
+            "path": path,
+        }
+    )
+    return None
+
+
+def _sanitize_report(report):
+    """Sanitize the complete report in place and surface serialization errors."""
+    problems = []
+    sanitized = _sanitize_json(report, problems=problems)
+    report.clear()
+    report.update(sanitized)
+    if not problems:
+        return report
+    coverage = report.get("coverage")
+    if isinstance(coverage, dict):
+        diagnostics = coverage.get("diagnostics")
+        if isinstance(diagnostics, list):
+            diagnostics.extend(problems)
+        else:
+            coverage["diagnostics"] = problems
+    report["status"] = "ERROR"
+    error = report.get("error")
+    if error is None:
+        report["error"] = {
+            "code": "REPORT_SERIALIZATION_INVALID",
+            "message": "Report contains values that cannot be serialized to JSON",
+            "diagnostics": {"problems": problems},
+        }
+    elif isinstance(error, dict):
+        diagnostics = error.setdefault("diagnostics", {})
+        if isinstance(diagnostics, dict):
+            diagnostics.setdefault("report_problems", []).extend(problems)
+    return report
+
+
 def finalize_report(report, data=None):
     """Attach ``schema_version``, ``results[]``, ``coverage`` and final status.
 
@@ -740,6 +830,15 @@ def finalize_report(report, data=None):
     """
     if not isinstance(report, dict):
         return report
+    if (
+        report.get("schema_version") == SCHEMA_VERSION
+        and isinstance(report.get("results"), list)
+        and isinstance(report.get("coverage"), dict)
+    ):
+        # Already normalized.  Sanitize again for callers that mutated the
+        # report, but do not rebuild results from already-sanitized raw fields:
+        # that would turn RESULT_VALUE_INVALID into RESULT_VALUE_MISSING.
+        return _sanitize_report(report)
     report["schema_version"] = SCHEMA_VERSION
     runs = report.get("runs")
     if not isinstance(runs, list) or not runs:
@@ -756,4 +855,4 @@ def finalize_report(report, data=None):
         results, problems = _build_results(descriptors, keys, runs, report)
         _apply_status(report, results, len(descriptors), problems)
     report.pop("_plan_data", None)
-    return report
+    return _sanitize_report(report)

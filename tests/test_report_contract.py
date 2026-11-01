@@ -236,7 +236,8 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(result["status"], "ERROR")
                 self.assertIsNone(result["value"])
                 self.assertEqual(result["error"]["code"], code)
-                json.dumps(report["results"], allow_nan=False)
+                serialized = json.dumps(report, allow_nan=False)
+                json.loads(serialized)
 
     def test_measured_requires_finite_numeric_value(self):
         data = divider_data()
@@ -275,7 +276,8 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(result["status"], "ERROR")
                 self.assertIsNone(result["value"])
                 self.assertEqual(result["error"]["code"], code)
-                json.dumps(report["results"], allow_nan=False)
+                serialized = json.dumps(report, allow_nan=False)
+                json.loads(serialized)
 
     def test_valid_values_are_preserved(self):
         data = divider_data()
@@ -290,6 +292,9 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(report["status"], "PASS")
                 self.assertEqual(report["results"][0]["status"], "PASS")
                 self.assertEqual(report["results"][0]["value"], value)
+                restored = json.loads(json.dumps(report, allow_nan=False))
+                self.assertEqual(restored["checks"][0]["value"], value)
+                self.assertEqual(restored["results"][0]["value"], value)
 
         data["checks"] = []
         data["measurements"] = [{"id": "m1", "type": "mean", "signal": "v(out)"}]
@@ -314,6 +319,122 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(report["status"], "PASS")
                 self.assertEqual(report["results"][0]["status"], "MEASURED")
                 self.assertEqual(report["results"][0]["value"], value)
+                restored = json.loads(json.dumps(report, allow_nan=False))
+                self.assertEqual(restored["measurements"][0]["value"], value)
+                self.assertEqual(restored["results"][0]["value"], value)
+
+    def test_nan_in_checks_is_sanitized_and_result_errors(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "checks": [dict(data["checks"][0], value=float("nan"), passed=True)],
+        }
+        finalize_report(report, data)
+        restored = json.loads(json.dumps(report, allow_nan=False))
+        self.assertEqual(restored["status"], "ERROR")
+        self.assertEqual(restored["results"][0]["status"], "ERROR")
+        self.assertEqual(restored["results"][0]["error"]["code"], "RESULT_VALUE_INVALID")
+        self.assertIsNone(restored["checks"][0]["value"])
+
+    def test_infinity_in_measurements_is_sanitized_and_result_errors(self):
+        data = divider_data()
+        data["checks"] = []
+        data["measurements"] = [{"id": "m1", "type": "mean", "signal": "v(out)"}]
+        report = {
+            "status": "PASS",
+            "error": None,
+            "run_id": "run_001",
+            "measurements": [
+                {
+                    "id": "m1",
+                    "type": "mean",
+                    "value": float("inf"),
+                    "unit": "V",
+                    "status": "MEASURED",
+                    "run_id": "run_001",
+                }
+            ],
+        }
+        finalize_report(report, data)
+        restored = json.loads(json.dumps(report, allow_nan=False))
+        self.assertEqual(restored["status"], "ERROR")
+        self.assertEqual(restored["results"][0]["error"]["code"], "RESULT_VALUE_INVALID")
+        self.assertIsNone(restored["measurements"][0]["value"])
+
+    def test_negative_infinity_in_runs_checks_is_sanitized(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "runs": [
+                {
+                    "run_id": "run_001",
+                    "checks": [
+                        dict(data["checks"][0], value=float("-inf"), passed=True)
+                    ],
+                }
+            ],
+        }
+        finalize_report(report, data)
+        restored = json.loads(json.dumps(report, allow_nan=False))
+        self.assertIsNone(restored["runs"][0]["checks"][0]["value"])
+        self.assertEqual(restored["results"][0]["status"], "ERROR")
+
+    def test_nan_in_graphs_is_sanitized(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "checks": [dict(data["checks"][0], value=2.5, passed=True)],
+            "graphs": [{"name": "g", "x": [0, float("nan")], "real": [0, float("inf")]}],
+        }
+        finalize_report(report, data)
+        restored = json.loads(json.dumps(report, allow_nan=False))
+        self.assertIsNone(restored["graphs"][0]["x"][1])
+        self.assertIsNone(restored["graphs"][0]["real"][1])
+        self.assertEqual(restored["status"], "PASS")
+
+    def test_infinity_in_nested_diagnostics_is_sanitized(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "checks": [dict(data["checks"][0], value=2.5, passed=True)],
+            "diagnostics": {"a": [{"b": float("inf")}]},
+        }
+        finalize_report(report, data)
+        restored = json.loads(json.dumps(report, allow_nan=False))
+        self.assertIsNone(restored["diagnostics"]["a"][0]["b"])
+        self.assertEqual(restored["status"], "PASS")
+
+    def test_unsupported_value_is_reported_without_breaking_json(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "checks": [dict(data["checks"][0], value=2.5, passed=True)],
+            "diagnostics": {"bad": {1, 2}},
+        }
+        finalize_report(report, data)
+        restored = json.loads(json.dumps(report, allow_nan=False))
+        self.assertEqual(restored["status"], "ERROR")
+        self.assertEqual(restored["error"]["code"], "REPORT_SERIALIZATION_INVALID")
+        self.assertIsNone(restored["diagnostics"]["bad"])
+
+    def test_repeated_finalize_preserves_invalid_code(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "checks": [dict(data["checks"][0], value=float("nan"), passed=True)],
+        }
+        finalize_report(report, data)
+        first_code = report["results"][0]["error"]["code"]
+        finalize_report(report, data)
+        self.assertEqual(first_code, "RESULT_VALUE_INVALID")
+        self.assertEqual(report["results"][0]["error"]["code"], first_code)
+        json.loads(json.dumps(report, allow_nan=False))
 
     def test_component_results_use_same_collection(self):
         data = {

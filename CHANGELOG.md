@@ -1,5 +1,13 @@
 # История изменений
 
+## 0.6.3 — JSON-safe report finalization
+
+- `report_model.finalize_report()` теперь рекурсивно очищает весь отчёт перед возвратом: `results[]`, `checks[]`, `measurements[]`, `runs[]`, `coverage`, `summary`, `graphs`, `diagnostics`, `error` и произвольные вложенные словари/массивы.
+- `NaN`, `Infinity` и `-Infinity` заменяются на `null`; конечные числа, включая `0` и отрицательные, сохраняются. Строки и boolean не преобразуются.
+- Проверка `_validated_result_value()` по-прежнему выполняется до очистки, поэтому `RESULT_VALUE_MISSING` и `RESULT_VALUE_INVALID` классифицируются корректно. Повторная финализация идемпотентна и не меняет диагностический код.
+- Неподдерживаемые JSON типы не превращаются в строки: значение заменяется на `null`, отчёт получает `REPORT_SERIALIZATION_INVALID` и статус `ERROR`, но остаётся сериализуемым.
+- Добавлены локальные тесты полной сериализации `json.dumps(report, allow_nan=False)`. Altium, MixedSim и полная регрессия не запускались.
+
 ## 0.6.2 — Value classification and strict batch contract
 
 - `report_model.py` различает отсутствующее/`null` значение (`RESULT_VALUE_MISSING`) и присутствующее недопустимое значение — `NaN`, `Infinity`, `-Infinity`, строка, boolean (`RESULT_VALUE_INVALID`). Исходное значение проверяется до нормализации; `NaN`/`Infinity` не попадают в финальный JSON, корректные числа (включая `0`) сохраняются.
