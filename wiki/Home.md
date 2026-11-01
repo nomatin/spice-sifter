@@ -7,7 +7,7 @@
 - [Интеграция с пакетными агентами](AGENT_INTEGRATION.md): `doctor --json`, `recover`, preflight и остановка серии.
 - [Автоматические измерения: формат и алгоритмы](MEASUREMENTS.md)
 - [Проверки измерений](MEASUREMENT_VERIFICATION.md)
-- [Разработка и устройство](DEVELOPMENT.md)
+- [Разработка, устройство и политика тестирования](DEVELOPMENT.md)
 - [Базовые проверки](VERIFICATION.md)
 - [Проверки AC](AC_VERIFICATION.md)
 - [Температурные проверки](TEMPERATURE_VERIFICATION.md)
