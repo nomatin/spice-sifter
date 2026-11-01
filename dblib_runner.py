@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 RESOURCE_ROOT = Path(__file__).resolve().parent / "dblib_resources"
@@ -381,7 +381,7 @@ def prepare_run(data, preflight):
 def read_status(path):
     try:
         text = Path(path).read_text(encoding="cp1251", errors="replace")
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
         return {}
     fields = {}
     for line in text.splitlines():
@@ -392,7 +392,8 @@ def read_status(path):
 
 
 def _launch(exe, script, run, timeout, verbose):
-    from spice_sifter import altium_session
+    from spice_sifter import altium_session, cached_altium_process
+    from runtime_state import clear_marker, utc_now, write_marker
     status_path = run / "status.txt"
     command = (
         '"' + str(exe) + '" -RScriptingSystem:RunScriptFile(FileName="' + str(script)
@@ -403,22 +404,43 @@ def _launch(exe, script, run, timeout, verbose):
         print("DbLib run directory: " + str(run), file=sys.stderr)
     start = time.time()
     with altium_session() as lock_root:
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if status_path.exists():
-                fields = read_status(status_path)
-                if fields.get("STATUS") in ("OK", "ERROR"):
-                    return fields, start
-            time.sleep(0.1)
-        (lock_root / "pending-run.txt").write_text(str(run), encoding="utf-8")
-        code = "TIMEOUT" if (run / "started.txt").exists() else "SCRIPT_NOT_EXECUTED"
-        raise DblibError(
-            "altium",
-            code,
-            "Altium did not write DbLib completion status before timeout",
-            {"script": str(script), "run": str(run)},
+        started = utc_now()
+        process = cached_altium_process(exe)
+        write_marker(
+            lock_root,
+            run_id=run.name,
+            run_dir=run,
+            altium_pid=process.get("pid") if process else None,
+            altium_start_time=process.get("start_time") if process else None,
+            started_at=started,
+            timeout_at=started + timedelta(seconds=timeout),
         )
+        try:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            clear_marker(lock_root)
+            raise
+        deadline = time.monotonic() + timeout
+        completed = False
+        try:
+            while time.monotonic() < deadline:
+                if status_path.exists():
+                    fields = read_status(status_path)
+                    if fields.get("STATUS") in ("OK", "ERROR"):
+                        completed = True
+                        return fields, start
+                time.sleep(0.1)
+            code = "TIMEOUT" if (run / "started.txt").exists() else "SCRIPT_NOT_EXECUTED"
+            # Keep the structured marker: the script may still be running.
+            raise DblibError(
+                "altium",
+                code,
+                "Altium did not write DbLib completion status before timeout",
+                {"script": str(script), "run": str(run)},
+            )
+        finally:
+            if completed:
+                clear_marker(lock_root)
 
 
 def _inside(path, root):
@@ -1049,6 +1071,11 @@ def execute_component(exe, data, base, timeout, verbose, report):
             error=_error("DBLIB_RUN_FAILED", str(exc), "harness"),
         )
 
+    try:
+        from report_model import finalize_report
+        finalize_report(report, data)
+    except Exception:
+        pass
     if run is not None:
         try:
             (run / "report.json").write_text(

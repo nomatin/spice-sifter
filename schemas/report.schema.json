@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nomatin/spice-sifter/schemas/report.schema.json",
+  "title": "Spice Sifter report",
+  "description": "Stable report contract (schema_version 1.0). results[] is the primary source of measurements; checks[], measurements[] and runs[] are kept for backward compatibility.",
+  "type": "object",
+  "required": ["schema_version", "status", "validation_status", "results", "coverage"],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": ["PASS", "FAIL", "ERROR"]
+    },
+    "validation_status": {
+      "enum": ["ASSERTIONS", "NO_ASSERTIONS"]
+    },
+    "test": {
+      "type": ["string", "null"]
+    },
+    "simulator": {
+      "type": ["string", "null"]
+    },
+    "run_id": {
+      "type": ["string", "null"]
+    },
+    "error": {
+      "anyOf": [
+        {"$ref": "#/$defs/error"},
+        {"type": "null"}
+      ]
+    },
+    "results": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/result"}
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "checks": {"type": "array"},
+    "measurements": {"type": "array"},
+    "runs": {"type": "array"},
+    "summary": {"type": "object"},
+    "graphs": {"type": "array"},
+    "stages": {"type": "object"},
+    "artifacts": {},
+    "diagnostics": {}
+  },
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1},
+        "message": {"type": "string"},
+        "stage": {"type": "string"},
+        "temperature_code": {"type": "string"},
+        "sweep_code": {"type": "string"},
+        "diagnostics": {},
+        "suggested_action": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "min": {"type": "number"},
+        "max": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "required": ["result_id", "run_id", "kind", "id", "status", "value", "unit", "error"],
+      "properties": {
+        "result_id": {"type": "string", "minLength": 1},
+        "run_id": {"type": ["string", "null"]},
+        "kind": {"enum": ["check", "measurement"]},
+        "id": {"type": ["string", "integer"]},
+        "status": {"enum": ["PASS", "FAIL", "MEASURED", "ERROR", "NOT_RUN"]},
+        "value": {"type": ["number", "null"]},
+        "unit": {"type": ["string", "null"]},
+        "error": {
+          "anyOf": [
+            {"$ref": "#/$defs/error"},
+            {"type": "null"}
+          ]
+        },
+        "limits": {"$ref": "#/$defs/limits"},
+        "parameters": {"type": "object"},
+        "temperature_c": {"type": "number"},
+        "frequency_hz": {"type": "number"},
+        "signal": {"type": "string"},
+        "component": {"type": "string"},
+        "scope": {"enum": ["sweep"]},
+        "run_ids": {"type": "array", "items": {"type": "string"}},
+        "markers": {}
+      },
+      "additionalProperties": true
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["status", "expected", "completed", "missing", "passed", "failed", "measured", "errors", "not_run"],
+      "properties": {
+        "status": {"enum": ["OK", "UNKNOWN"]},
+        "expected": {"type": ["integer", "null"], "minimum": 0},
+        "completed": {"type": "integer", "minimum": 0},
+        "missing": {"type": ["integer", "null"], "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "measured": {"type": "integer", "minimum": 0},
+        "errors": {"type": "integer", "minimum": 0},
+        "not_run": {"type": "integer", "minimum": 0},
+        "diagnostics": {"type": "array"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

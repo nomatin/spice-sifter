@@ -6,6 +6,7 @@ Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
 from contextlib import contextmanager
+from datetime import timedelta
 import json
 import math
 import os
@@ -14,9 +15,26 @@ import re
 import sys
 
 class TestError(Exception):
-    def __init__(self, code, message):
+    def __init__(self, code, message, diagnostics=None, suggested_action=None):
         self.code, self.message = code, message
+        self.diagnostics = diagnostics
+        self.suggested_action = suggested_action
         super().__init__(message)
+
+
+SYSTEMIC_ERROR_CODES = {
+    'BUSY',
+    'TIMEOUT',
+    'SCRIPT_NOT_EXECUTED',
+    'ALTIUM_NOT_RUNNING',
+    'ALTIUM_STATE_UNKNOWN',
+    'ALTIUM_PENDING_RUN',
+    'ALTIUM_BLOCKED_BY_PENDING_RUN',
+}
+
+
+def is_systemic_error(error):
+    return isinstance(error, dict) and error.get('code') in SYSTEMIC_ERROR_CODES
 
 def load_test(path,max_runs=100):
     try:
@@ -525,69 +543,76 @@ def pas_string(value):
     return "'" + ''.join(("''" if c == "'" else c) if ord(c)<128 else "'#"+str(ord(c))+"'" for c in str(value)) + "'"
 
 
+_ALTIUM_PROCESS_CACHE = {}
+
+
+def _exe_key(exe):
+    return os.path.normcase(os.path.abspath(str(exe))) if exe else None
+
+
+def cached_altium_process(exe):
+    return _ALTIUM_PROCESS_CACHE.get(_exe_key(exe))
+
+
 def require_running_altium(exe):
     """Require the selected installation, excluding transient -R launchers."""
-    command = ("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter \"name='X2.EXE'\" "
-               "-ErrorAction Stop | Select-Object ExecutablePath,CommandLine,@{Name='Responding';Expression={(Get-Process -Id $_.ProcessId -ErrorAction Stop).Responding}} | ConvertTo-Json -Compress")
+    from runtime_state import ProcessQueryError, running_altium
     try:
-        result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command', command],
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10)
-        if result.returncode:
-            raise ValueError('Windows process query failed')
-        processes = json.loads(result.stdout) if result.stdout.strip() else []
-        if isinstance(processes, dict):
-            processes = [processes]
-        expected = os.path.normcase(os.path.abspath(exe))
-        for process in processes:
-            path = process.get('ExecutablePath')
-            command_line = process.get('CommandLine') or ''
-            if (path and os.path.normcase(os.path.abspath(path)) == expected
-                    and not re.search(r'(?:^|[\s"])\-R', command_line, re.I)):
-                if process.get('Responding') is False:
-                    raise TestError('BUSY','Selected Altium process is not responding')
-                return
-    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        process = running_altium(exe)
+    except ProcessQueryError as e:
         raise TestError('ALTIUM_STATE_UNKNOWN', 'Cannot verify running Altium: '+str(e)) from e
-    raise TestError('ALTIUM_NOT_RUNNING', 'Start the selected Altium Designer before running the test')
+    if process is None:
+        raise TestError('ALTIUM_NOT_RUNNING', 'Start the selected Altium Designer before running the test')
+    if process.get('responding') is False:
+        raise TestError('BUSY','Selected Altium process is not responding')
+    _ALTIUM_PROCESS_CACHE[_exe_key(exe)] = process
+    return process
 
 
 def read_status(path):
     try:
         text=path.read_text(encoding='utf-8-sig')
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
         return {}
-    return dict(line.split('=',1) for line in text.splitlines() if '=' in line)
+    fields={}
+    for line in text.splitlines():
+        if '=' in line:
+            key,value=line.split('=',1)
+            fields[key]=value
+    return fields
 
 
 @contextmanager
 def altium_session():
-    """Shared Altium lock and pending-run guard for every runner mode."""
+    """Shared Altium lock and safe pending-run recovery for every runner mode."""
+    from runtime_state import MarkerError, acquire_lock, resolve_pending
     root = Path(tempfile.gettempdir()) / 'SpiceSifter'
-    root.mkdir(exist_ok=True)
-    guard=root/'pending-run.txt'
-    import msvcrt
-    lock = (root / 'altium.lock').open('a+b')
-    lock.seek(0)
-    if not lock.read(1):
-        lock.write(b'0'); lock.flush()
-    lock.seek(0)
     try:
-        msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError:
-        lock.close()
-        raise TestError('BUSY','Another Spice Sifter run holds the Altium lock')
-    try:
-        if guard.exists():
-            pending=Path(guard.read_text(encoding='utf-8'))
-            previous=read_status(pending/'status.txt')
-            if previous.get('STATUS') not in ('OK','ERROR'):
-                raise TestError('BUSY','Previous timed-out run has not completed: '+str(pending))
-            guard.unlink()
-        yield root
-    finally:
-        msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
-        lock.close()
+        with acquire_lock(root):
+            pending = resolve_pending(root)
+            state = pending['state']
+            diagnostics = pending.get('diagnostics')
+            if state == 'ACTIVE':
+                raise TestError(
+                    'ALTIUM_PENDING_RUN',
+                    'Previous simulation has not finished',
+                    diagnostics=diagnostics,
+                    suggested_action='Run: python spice_sifter.py doctor --json',
+                )
+            if state in ('UNKNOWN', 'CORRUPTED'):
+                raise TestError(
+                    'ALTIUM_STATE_UNKNOWN',
+                    'Cannot determine whether the previous run has finished',
+                    diagnostics=diagnostics,
+                    suggested_action='Run: python spice_sifter.py recover',
+                )
+            yield root
+    except MarkerError as e:
+        raise TestError(
+            'BUSY',
+            str(e),
+            suggested_action='Wait for the other Spice Sifter process to finish',
+        ) from e
 
 
 def with_altium_session(function):
@@ -599,12 +624,15 @@ def with_altium_session(function):
 
 @with_altium_session
 def run_altium(exe, data, base, timeout, keep, report, verbose=False):
+    from runtime_state import clear_marker, utc_now, write_marker
     root = Path(tempfile.gettempdir()) / 'SpiceSifter'
     work = root / uuid.uuid4().hex
     work.mkdir()
     if 'temperature_c' in report or 'parameters' in report or '_measurement_requests' in report:report['run_id']=work.name
     success = False
     timed_out = False
+    completed = False
+    marker_written = False
     try:
         nsx = work/'test.nsx'
         nsx.write_text(generate_nsx(data,base),encoding='utf-8')
@@ -651,7 +679,24 @@ end;
         (work/'run.log').write_text(command,encoding='utf-8')
         if verbose:
             print('Run directory: '+str(work),file=sys.stderr)
-        subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        started = utc_now()
+        process = cached_altium_process(exe)
+        write_marker(
+            root,
+            run_id=work.name,
+            run_dir=work,
+            altium_pid=process.get('pid') if process else None,
+            altium_start_time=process.get('start_time') if process else None,
+            started_at=started,
+            timeout_at=started + timedelta(seconds=timeout),
+        )
+        marker_written = True
+        try:
+            subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        except Exception:
+            clear_marker(root)
+            marker_written = False
+            raise
         deadline=time.monotonic()+timeout
         collection_sent=False
         while True:
@@ -683,9 +728,14 @@ begin
 end;
 """ % tuple(map(pas_string,[expected,expected,work/'collect.tmp',status,work/'collect.tmp',status])),encoding='ascii')
                         subprocess.Popen('"'+str(exe)+'" -RScriptingSystem:RunScriptFile(FileName="'+str(collect)+'"|ProcName="RunTests")',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-                elif fields.get('STATUS') == 'ERROR':
+                collect_fields = read_status(work/'collect.tmp')
+                if collect_fields.get('STATUS') in ('OK','ERROR'):
+                    fields = collect_fields
+                if fields.get('STATUS') == 'ERROR':
+                    completed = True
                     raise TestError(fields.get('CODE','SIM_NOT_RUN'),'MixedSim script failed; inspect artifacts')
                 if fields.get('STATUS') == 'OK':
+                    completed = True
                     result=Path(fields.get('SDF_PATH',''))
                     if result.resolve() != expected.resolve() or not result.is_file():
                         raise TestError('SDF_NOT_SAVED','Expected current-run SDF was not saved')
@@ -709,9 +759,10 @@ end;
             report['diagnostics']={'script_started':(work/'started.txt').exists(),'status':read_status(work/'status.txt'),'files':[p.name for p in work.iterdir() if p.is_file()]}
         else:
             shutil.rmtree(work,ignore_errors=True)
-        if timed_out:
-            # A timed-out script may still run. Preserve a guard for subsequent calls.
-            (root/'pending-run.txt').write_text(str(work),encoding='utf-8')
+        if marker_written and not timed_out and completed:
+            # The script wrote a final status; the marker is stale.
+            clear_marker(root)
+        # A timed-out or unconfirmed script may still run: keep the marker.
 
 class TemperatureInputError(TestError):
     def __init__(self, reason, message):
@@ -779,6 +830,10 @@ def error_payload(error):
     payload=dict(code=error.code,message=error.message)
     if hasattr(error,'temperature_code'):payload['temperature_code']=error.temperature_code
     if hasattr(error,'sweep_code'):payload['sweep_code']=error.sweep_code
+    diagnostics=getattr(error,'diagnostics',None)
+    if diagnostics:payload['diagnostics']=diagnostics
+    suggested=getattr(error,'suggested_action',None)
+    if suggested:payload['suggested_action']=suggested
     return payload
 
 
@@ -809,17 +864,21 @@ def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=N
 
 
 def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
+    from report_model import finalize_report
     if 'component' in data:
         from dblib_runner import execute_component
-        return execute_component(exe,data,base,timeout,verbose,report)
+        execute_component(exe,data,base,timeout,verbose,report)
+        return finalize_report(report,data)
     if 'sweep' in data:
-        return execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs)
+        execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs)
+        return finalize_report(report,data)
     plan=temperature_plan(data)
     if 'temperatures_c' not in data:
         report.update(execute_one(exe,data,base,timeout,keep,verbose,plan[0] if plan else None))
         finish_measurements(data,report)
-        return
+        return finalize_report(report,data)
     runs=[]
+    stopped=False
     for t in plan:
         variant=dict(data)
         variant.pop('temperatures_c')
@@ -829,13 +888,19 @@ def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
         if 'measurements' in data:variant['measurements']=[m for m in data['measurements'] if 'temperature_c' not in m or m['temperature_c']==t]
         if 'output' in data:
             variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k!='temperatures_c'} for g in data['output'].get('graphs',[]) if 'temperatures_c' not in g or t in g['temperatures_c']])
-        runs.append(execute_one(exe,variant,base,timeout,keep,verbose,t))
+        run=execute_one(exe,variant,base,timeout,keep,verbose,t)
+        runs.append(run)
+        if is_systemic_error(run.get('error')):
+            stopped=True
+            break
     report.pop('checks',None)
     report['runs']=runs
-    report['summary']=dict(total=len(runs),passed=sum(r['status']=='PASS' for r in runs),failed=sum(r['status']=='FAIL' for r in runs),errors=sum(r['status']=='ERROR' for r in runs))
+    report['summary']=dict(total=len(plan),passed=sum(r['status']=='PASS' for r in runs),failed=sum(r['status']=='FAIL' for r in runs),errors=sum(r['status']=='ERROR' for r in runs))
+    if stopped:report['summary'].update(completed=len(runs),not_run=len(plan)-len(runs))
     report['status']='ERROR' if report['summary']['errors'] else ('FAIL' if report['summary']['failed'] else 'PASS')
     report['error']=next((r['error'] for r in runs if r['error']),None)
     finish_measurements(data,report)
+    return finalize_report(report,data)
 
 
 from decimal import Decimal, localcontext
@@ -979,7 +1044,7 @@ def execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs):
                 variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k not in ('when','temperatures_c')} for g in data['output'].get('graphs',[]) if applies(g) and ('temperatures_c' not in g or t in g['temperatures_c'])])
             run=execute_one(exe,variant,base,timeout,keep,verbose,t,parameters)
             runs.append(run)
-            if run['error'] and run['error']['code'] in ('TIMEOUT','SCRIPT_NOT_EXECUTED','BUSY','ALTIUM_NOT_RUNNING','ALTIUM_STATE_UNKNOWN'):
+            if is_systemic_error(run.get('error')):
                 stopped=True
         if stopped:break
     report.pop('checks',None);report['runs']=runs
@@ -1325,7 +1390,97 @@ class JSONArgumentParser(argparse.ArgumentParser):
     def error(self, message):
         raise TestError('INPUT_INVALID',message)
 
-def main():
+def _select_altium(exe):
+    """Resolve an explicit path or the default Altium 24.4 installation."""
+    if exe:
+        return exe
+    from runtime_state import file_version
+    candidate=Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Altium/AD24/X2.EXE'
+    if candidate.is_file():
+        version=file_version(candidate)
+        if version and version.startswith('24.4.'):
+            return str(candidate)
+    return exe
+
+
+def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=False, max_runs=100):
+    """Run one test file and always return a finalized report."""
+    from report_model import finalize_report
+    report = dict(status='ERROR', test=None, simulator='Altium MixedSim', checks=[], error=None)
+    data = None
+    try:
+        data = load_test(path,max_runs)
+        report['test'] = data['name']
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise TestError('INPUT_INVALID', 'timeout must be positive and finite')
+        selected = _select_altium(altium)
+        if not selected or not Path(selected).is_file():
+            raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or SPICE_SIFTER_ALTIUM to X2.EXE')
+        if 'component' not in data:
+            require_running_altium(selected)
+        execute_test(selected,data,Path(path).resolve().parent,timeout,keep_files,verbose,report,max_runs)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
+    except TestError as e:
+        report['error'] = error_payload(e)
+    return finalize_report(report, data)
+
+
+def _service_parser(command):
+    parser = JSONArgumentParser(prog='spice_sifter.py ' + command)
+    parser.add_argument('--altium', default=os.environ.get('SPICE_SIFTER_ALTIUM'))
+    parser.add_argument('--json', action='store_true')
+    return parser
+
+
+def _print_doctor_human(report):
+    altium = report.get('altium', {})
+    print('Spice Sifter doctor')
+    print('Status: ' + str(report.get('status')))
+    print('Altium: ' + str(altium.get('path')))
+    print('  exists: ' + str(altium.get('exists')))
+    print('  version: ' + str(altium.get('version')))
+    print('  running: ' + str(altium.get('running')))
+    print('  responding: ' + str(altium.get('responding')))
+    print('Lock available: ' + str(report.get('lock', {}).get('available')))
+    pending = report.get('pending_run')
+    if pending:
+        print('Pending run: ' + str(pending.get('run_id')) + ' (' + str(pending.get('state')) + ')')
+        print('  run_dir: ' + str(pending.get('run_dir')))
+        print('  recovery_possible: ' + str(pending.get('recovery_possible')))
+    else:
+        print('Pending run: none')
+    for diagnostic in report.get('diagnostics', []):
+        print('Diagnostic: ' + diagnostic)
+    if report.get('suggested_action'):
+        print('Suggested action: ' + report['suggested_action'])
+
+
+def _service_main(command, argv):
+    parser = _service_parser(command)
+    try:
+        args = parser.parse_args(argv)
+    except TestError as exc:
+        print(json.dumps({'schema_version': '1.0', 'status': 'ERROR', 'error': error_payload(exc)}, ensure_ascii=True))
+        return 2
+    if command == 'doctor':
+        from runtime_state import doctor_report
+        report = doctor_report(args.altium)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')))
+        else:
+            _print_doctor_human(report)
+        return 0 if report.get('ready') else 2
+    from runtime_state import recover_pending
+    report = recover_pending()
+    print(json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')))
+    return 0 if report.get('ready') else 2
+
+
+def main(argv=None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] in ('doctor', 'recover'):
+        return _service_main(arguments[0], arguments[1:])
     p = JSONArgumentParser()
     p.add_argument('test')
     p.add_argument('--altium', default=os.environ.get('SPICE_SIFTER_ALTIUM'))
@@ -1335,26 +1490,23 @@ def main():
     p.add_argument('--max-runs',type=int,default=100)
     report = dict(status='ERROR', test=None, simulator='Altium MixedSim', checks=[], error=None)
     try:
-        args = p.parse_args()
-        data = load_test(args.test,args.max_runs)
-        report['test'] = data['name']
-        if not math.isfinite(args.timeout) or args.timeout <= 0:
-            raise TestError('INPUT_INVALID', 'timeout must be positive and finite')
-        if not args.altium:
-            candidate=Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Altium/AD24/X2.EXE'
-            if candidate.is_file():
-                version=subprocess.run(['powershell','-NoProfile','-Command', "(Get-Item -LiteralPath '"+str(candidate).replace("'","''")+"').VersionInfo.ProductVersion"],capture_output=True,text=True,timeout=10).stdout.strip()
-                if version.startswith('24.4.'):
-                    args.altium=str(candidate)
-        if not args.altium or not Path(args.altium).is_file():
-            raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or SPICE_SIFTER_ALTIUM to X2.EXE')
-        if 'component' not in data:
-            require_running_altium(args.altium)
-        execute_test(args.altium,data,Path(args.test).resolve().parent,args.timeout,args.keep_files,args.verbose,report,args.max_runs)
+        args = p.parse_args(arguments)
+        report = run_test_file(
+            args.test,
+            altium=args.altium,
+            timeout=args.timeout,
+            keep_files=args.keep_files,
+            verbose=args.verbose,
+            max_runs=args.max_runs,
+        )
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        from report_model import finalize_report
         report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
+        finalize_report(report, None)
     except TestError as e:
+        from report_model import finalize_report
         report['error'] = error_payload(e)
+        finalize_report(report, None)
     print(json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')))
     return {'PASS':0,'FAIL':1,'ERROR':2}[report['status']]
 

@@ -26,8 +26,12 @@ class RuntimeTests(unittest.TestCase):
    self.assertEqual(c.exception.code,'TIMEOUT')
    self.assertTrue(Path(report['artifacts']).exists())
    with self.assertRaises(TestError) as c:run_altium('X2.EXE',data,Path('.'),0.01,False,{})
-   self.assertEqual(c.exception.code,'BUSY')
+   self.assertIn(c.exception.code,('ALTIUM_PENDING_RUN','ALTIUM_STATE_UNKNOWN','BUSY'))
    self.assertEqual(launch.call_count,1)
+ def test_read_status_tolerates_locked_file(self):
+  from spice_sifter import read_status
+  with patch('pathlib.Path.read_text',side_effect=PermissionError('locked')):
+   self.assertEqual(read_status(Path('status.txt')),{})
 
 
 class RunningAltiumTests(unittest.TestCase):

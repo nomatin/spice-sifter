@@ -1,5 +1,23 @@
 # История изменений
 
+## 0.6 — Reliable Execution & Report Contract
+
+- Добавлен `schema_version: "1.0"` во все отчёты.
+- Добавлена единая коллекция `results[]` для Standalone SPICE, DbLib Component, Temperature Testing, Parameter Sweep, Automatic Measurements и частично выполненных/ошибочных испытаний.
+- Добавлен раздел `coverage` с инвариантами `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`.
+- Планировщик ожидаемых результатов учитывает `checks`, `measurements`, `temperatures_c`, `sweep.parameters`, фильтры `when` и `temperature_c`. Семейные sweep-измерения дают один результат на температурную группу и имеют `scope: "sweep"` + `run_ids`.
+- Потерянный или невыполненный результат даёт `ERROR / REPORT_INCOMPLETE`, дубликат `result_id` — диагностическую ошибку. Ложный `PASS` исключён.
+- Добавлены статусы `MEASURED` и `NOT_RUN`; при отсутствии допусков возвращается `validation_status: "NO_ASSERTIONS"`.
+- `pending-run.txt` заменён на атомарный структурированный JSON-маркер (run_id, run_dir, PID и время создания Altium, runner_pid, started_at, timeout_at, state). Старый формат с путём поддерживается.
+- Добавлено безопасное самовосстановление: маркер удаляется только при доказанном завершении запуска или процесса Altium; активная/неопределённая симуляция не прерывается. Возраст маркера не является основанием для удаления.
+- Добавлены команды `python spice_sifter.py doctor [--json]` и `python spice_sifter.py recover`; прежний CLI не изменён.
+- Добавлена эталонная интеграция пакетного агента `batch_agent.py`: один preflight, остановка серии при системной ошибке, `NOT_RUN` для незапущенных испытаний.
+- Устранены гонки чтения `collect.tmp`/`status.txt`: временная блокировка файла и `SAVE_PENDING` с готовым `collect.tmp` больше не приводят к ложному тайм-ауту.
+- Добавлены `schemas/report.schema.json`, `report_model.py`, `runtime_state.py`, автотесты контракта, pending-run, doctor/recover и batch preflight.
+- Документация: [REPORT_CONTRACT.md](wiki/REPORT_CONTRACT.md), [AGENT_INTEGRATION.md](wiki/AGENT_INTEGRATION.md), обновлены README, User-Guide, DEVELOPMENT и Home.
+
+Проверка на Altium Designer 24.4.1.13: 174 автотеста, Standalone 7/7, Parameter Sweep 11/11, Temperature 9/9, Automatic Measurements 7/7, AC 11/11, DbLib 13/13, multipin DbLib — все доступные кейсы OK (BJT ожидаемо `BLOCKED`). 65 реальных отчётов v1.0 прошли JSON Schema и проверку инвариантов coverage.
+
 ## Невыпущенные изменения
 
 - Добавлен режим **DbLib Component**: компонент из установленной DbLib автоматически размещается на подготовленном SchDoc, подключается Wire/Net Label, компилируется, Altium формирует NSX, MixedSim создаёт SDF, а результат проходит через существующие Validator/Measurements/Graph Export.

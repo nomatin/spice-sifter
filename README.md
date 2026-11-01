@@ -1,10 +1,12 @@
-# Spice Sifter 0.5
+# Spice Sifter 0.6
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](LICENSE)
 
 Консольная утилита для автоматической проверки SPICE-моделей через Altium MixedSim. Принимает JSON с испытательной схемой или компонентом DbLib, выполняет моделирование и возвращает JSON-отчёт.
 
 Поддерживает Transient, DC/OP, комплексный импеданс AC, температурные серии, Parameter Sweep, экспорт числовых массивов графиков и автоматическое извлечение характеристик.
+
+Начиная с 0.6 каждый отчёт содержит `schema_version: "1.0"`, единую коллекцию `results[]` и раздел `coverage`. Это основной источник измерений для автоматических агентов; исторические `checks[]`, `measurements[]` и `runs[]` сохранены для обратной совместимости. Подробности — [контракт отчёта](wiki/REPORT_CONTRACT.md).
 
 ## Ветки
 
@@ -78,9 +80,72 @@ python spice_sifter.py examples/diode.json --altium "C:\Program Files\Altium\AD2
 
 Altium должен быть запущен и доступен. Одновременные проверки и ручная симуляция во время работы утилиты не поддерживаются. Пользовательские документы не изменяются.
 
+## Результаты и coverage
+
+Отчёт всегда содержит `schema_version`, `results[]` и `coverage`:
+
+```json
+{
+  "schema_version": "1.0",
+  "status": "PASS",
+  "validation_status": "ASSERTIONS",
+  "coverage": {
+    "status": "OK",
+    "expected": 14,
+    "completed": 14,
+    "missing": 0,
+    "passed": 9,
+    "failed": 1,
+    "measured": 4,
+    "errors": 0,
+    "not_run": 0
+  },
+  "results": [
+    {
+      "result_id": "run_001:check:0",
+      "run_id": "run_001",
+      "kind": "check",
+      "id": 0,
+      "status": "PASS",
+      "value": 2.5,
+      "unit": null,
+      "limits": {"min": 2.4, "max": 2.6},
+      "error": null
+    }
+  ]
+}
+```
+
+Статусы: `PASS`, `FAIL`, `MEASURED`, `ERROR`, `NOT_RUN`. `MEASURED` не подтверждает соответствие datasheet, `NOT_RUN` не является `PASS`. Итоговый статус: `ERROR > FAIL > PASS`. Потерянный или невыполненный результат даёт `ERROR / REPORT_INCOMPLETE`, а не ложный `PASS`. Если проверок по допускам нет, указывается `validation_status: "NO_ASSERTIONS"`.
+
+## doctor и recover
+
+Проверка готовности среды без запуска моделирования:
+
+```powershell
+python spice_sifter.py doctor
+python spice_sifter.py doctor --json
+```
+
+Статусы: `READY`, `BUSY`, `RECOVERY_REQUIRED`, `ERROR`. Проверяются X2.EXE, версия Altium, запущенный процесс, отзывчивость, межпроцессная блокировка, `pending-run`, временная директория и ресурсы шаблонов DbLib.
+
+Безопасное восстановление после неудачного запуска:
+
+```powershell
+python spice_sifter.py recover
+```
+
+`recover` удаляет маркер только если предыдущий запуск доказанно завершён (финальный статус) или процесс Altium завершился / PID был переиспользован. Активная симуляция не прерывается, маркер не удаляется. Возраст маркера сам по себе не является основанием для удаления.
+
+## Пакетные испытания
+
+Перед серией агент должен один раз вызвать `doctor --json`. Если среда не готова, ни один тест не запускается, а вся серия помечается `NOT_RUN`. При системной ошибке в середине серии (`BUSY`, `TIMEOUT`, `SCRIPT_NOT_EXECUTED`, `ALTIUM_NOT_RUNNING`, `ALTIUM_STATE_UNKNOWN`) оставшиеся тесты не запускаются, уже завершённые отчёты сохраняются. Эталонная реализация — [`batch_agent.py`](batch_agent.py); описание — [интеграция с агентами](wiki/AGENT_INTEGRATION.md).
+
 ## Документация
 
 - [Wiki — руководство и подробная документация](wiki/Home.md)
+- [Контракт JSON-отчёта 1.0](wiki/REPORT_CONTRACT.md)
+- [Интеграция с пакетными агентами](wiki/AGENT_INTEGRATION.md)
 - [Автоматические измерения](wiki/MEASUREMENTS.md)
 - [Готовые примеры тестов](examples/)
 - [История изменений](CHANGELOG.md)
