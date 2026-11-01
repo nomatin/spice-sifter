@@ -70,6 +70,21 @@
 | `ERROR` | Достоверный результат получить нельзя |
 | `NOT_RUN` | Проверка/измерение не выполнялись; это **не** `PASS` |
 
+Для `PASS`, `FAIL` и `MEASURED` поле `value` обязано быть конечным числом. `null`, `NaN`, `Infinity`, `-Infinity`, строка, boolean или отсутствующее значение переводят результат в `ERROR`:
+
+```json
+{
+  "status": "ERROR",
+  "value": null,
+  "error": {
+    "code": "RESULT_VALUE_INVALID",
+    "message": "Result has no valid finite numeric value"
+  }
+}
+```
+
+Если значение отсутствует полностью, используется `RESULT_VALUE_MISSING`. Для `ERROR` и `NOT_RUN` значение `null` допустимо. Итоговый статус отчёта пересчитывается после этой проверки.
+
 ## coverage
 
 ```json

@@ -164,6 +164,51 @@ class MarkerTests(unittest.TestCase):
             rs.marker_path(root).write_text(str(Path(td) / "missing_run"), encoding="utf-8")
             self.assertEqual(rs.assess_pending(root, dead)["state"], "STALE")
 
+    def test_legacy_without_status_and_no_altium_is_recovered(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = rs.state_root(td)
+            run = Path(td) / "legacy_run"
+            run.mkdir()
+            root.mkdir(parents=True, exist_ok=True)
+            rs.marker_path(root).write_text(str(run), encoding="utf-8")
+            assessment = rs.assess_pending(root, dead, altium_lookup=lambda: [])
+            self.assertEqual(assessment["state"], "STALE")
+            self.assertEqual(
+                assessment["diagnostics"]["reason"], "legacy_marker_no_altium_processes"
+            )
+            self.assertTrue(rs.resolve_pending(root, dead, altium_lookup=lambda: [])["removed"])
+            self.assertFalse(rs.marker_path(root).exists())
+
+    def test_legacy_without_status_and_altium_running_is_kept(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = rs.state_root(td)
+            run = Path(td) / "legacy_run"
+            run.mkdir()
+            root.mkdir(parents=True, exist_ok=True)
+            rs.marker_path(root).write_text(str(run), encoding="utf-8")
+            assessment = rs.assess_pending(
+                root, dead, altium_lookup=lambda: [{"pid": 1}]
+            )
+            self.assertEqual(assessment["state"], "UNKNOWN")
+            self.assertFalse(assessment["removable"])
+            self.assertTrue(rs.marker_path(root).exists())
+
+    def test_legacy_without_status_and_unknown_process_state_is_kept(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = rs.state_root(td)
+            run = Path(td) / "legacy_run"
+            run.mkdir()
+            root.mkdir(parents=True, exist_ok=True)
+            rs.marker_path(root).write_text(str(run), encoding="utf-8")
+
+            def unavailable():
+                raise rs.ProcessQueryError("access denied")
+
+            assessment = rs.assess_pending(root, dead, altium_lookup=unavailable)
+            self.assertEqual(assessment["state"], "UNKNOWN")
+            self.assertIn("legacy_process_query_failed", assessment["diagnostics"]["reason"])
+            self.assertTrue(rs.marker_path(root).exists())
+
 
 class SessionTests(unittest.TestCase):
     def test_session_recovers_stale_marker(self):
@@ -254,6 +299,35 @@ class RecoverTests(unittest.TestCase):
             self.assertEqual(result["status"], "NOTHING_TO_RECOVER")
             self.assertTrue(result["ready"])
 
+    def test_recover_legacy_without_status_and_no_altium(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = rs.state_root(td)
+            run = Path(td) / "legacy_run"
+            run.mkdir()
+            root.mkdir(parents=True, exist_ok=True)
+            rs.marker_path(root).write_text(str(run), encoding="utf-8")
+            result = rs.recover_pending(td, dead, altium_lookup=lambda: [])
+            self.assertEqual(result["status"], "RECOVERED")
+            self.assertTrue(result["ready"])
+            self.assertFalse(rs.marker_path(root).exists())
+
+    def test_confirm_legacy_does_not_bypass_running_altium(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = rs.state_root(td)
+            run = Path(td) / "legacy_run"
+            run.mkdir()
+            root.mkdir(parents=True, exist_ok=True)
+            rs.marker_path(root).write_text(str(run), encoding="utf-8")
+            result = rs.recover_pending(
+                td,
+                dead,
+                altium_lookup=lambda: [{"pid": 1}],
+                confirm_legacy_stopped=True,
+            )
+            self.assertFalse(result["ready"])
+            self.assertIn(result["status"], ("REFUSED", "UNKNOWN"))
+            self.assertTrue(rs.marker_path(root).exists())
+
     def test_recover_lock_busy(self):
         with tempfile.TemporaryDirectory() as td:
             root = rs.state_root(td)
@@ -269,9 +343,10 @@ class DoctorTests(unittest.TestCase):
         path.write_text("stub", encoding="utf-8")
         return path
 
-    def run_doctor(self, td, processes, pending=None):
-        with patch("runtime_state.altium_processes", return_value=processes), patch(
-            "runtime_state.file_version", return_value="24.4.1.13"
+    def run_doctor(self, td, processes, pending=None, version="24.4.1.13", query=None):
+        query = query or (lambda exe=None: processes)
+        with patch("runtime_state.altium_processes", side_effect=query), patch(
+            "runtime_state.file_version", return_value=version
         ), patch("runtime_state.process_info", side_effect=pending or dead):
             return rs.doctor_report(str(self.fake_exe(td)), temp_dir=td)
 
@@ -294,6 +369,56 @@ class DoctorTests(unittest.TestCase):
             self.assertTrue(report["ready"])
             self.assertTrue(report["lock"]["available"])
             self.assertIsNone(report["pending_run"])
+
+    def test_not_responding_is_busy(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self.run_doctor(td, [{"pid": 1, "responding": False, "start_time": START}])
+            self.assertEqual(report["status"], "BUSY")
+            self.assertFalse(report["ready"])
+
+    def test_unknown_responsiveness_is_not_ready(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self.run_doctor(td, [{"pid": 1, "responding": None, "start_time": START}])
+            self.assertNotEqual(report["status"], "READY")
+            self.assertFalse(report["ready"])
+
+    def test_unknown_version_is_not_ready(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self.run_doctor(
+                td, [{"pid": 1, "responding": True, "start_time": START}], version=None
+            )
+            self.assertNotEqual(report["status"], "READY")
+            self.assertFalse(report["ready"])
+
+    def test_unsupported_version_is_not_ready(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self.run_doctor(
+                td, [{"pid": 1, "responding": True, "start_time": START}], version="23.0.1"
+            )
+            self.assertNotEqual(report["status"], "READY")
+            self.assertFalse(report["ready"])
+
+    def test_process_query_error_is_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            def unavailable(exe=None):
+                raise rs.ProcessQueryError("access denied")
+
+            report = self.run_doctor(td, None, query=unavailable)
+            self.assertEqual(report["status"], "ERROR")
+            self.assertFalse(report["ready"])
+
+    def test_multiple_processes_are_not_ready(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self.run_doctor(
+                td,
+                [
+                    {"pid": 1, "responding": True, "start_time": START},
+                    {"pid": 2, "responding": True, "start_time": START},
+                ],
+            )
+            self.assertNotEqual(report["status"], "READY")
+            self.assertFalse(report["ready"])
+            self.assertEqual(report["altium"]["state"], "AMBIGUOUS")
 
     def test_active_pending_is_busy(self):
         with tempfile.TemporaryDirectory() as td:

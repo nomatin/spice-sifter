@@ -305,7 +305,7 @@ def _check_result(descriptor, row, run_id, run):
     )
     if row is None:
         return result
-    result["value"] = _json_number(row.get("value"))
+    result["value"] = row.get("value")
     if row.get("unit") is not None:
         result["unit"] = row.get("unit")
     if row.get("markers") is not None:
@@ -328,7 +328,7 @@ def _measurement_result(descriptor, row, run_id, run):
     if row is None:
         return result
     _apply_row_status(result, row, "measurement")
-    result["value"] = _json_number(row.get("value"))
+    result["value"] = row.get("value")
     if row.get("unit") is not None:
         result["unit"] = row.get("unit")
     if row.get("error") is not None:
@@ -358,7 +358,7 @@ def _family_result(descriptor, row):
     if row is None:
         return result
     _apply_row_status(result, row, "measurement")
-    result["value"] = _json_number(row.get("value"))
+    result["value"] = row.get("value")
     if row.get("unit") is not None:
         result["unit"] = row.get("unit")
     if row.get("error") is not None:
@@ -609,8 +609,35 @@ def _has_assertions(data, results):
     )
 
 
+def _validated_result_value(result):
+    """Enforce a finite numeric value for PASS/FAIL/MEASURED results."""
+    status = result.get("status")
+    value = result.get("value")
+    if status in ("PASS", "FAIL", "MEASURED"):
+        if value is None:
+            code = "RESULT_VALUE_MISSING"
+            message = "Result has no numeric value"
+        elif isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            code = "RESULT_VALUE_INVALID"
+            message = "Result has no valid finite numeric value"
+        else:
+            return result
+        result["status"] = "ERROR"
+        result["value"] = None
+        result["error"] = {"code": code, "message": message}
+        return result
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        result["value"] = None
+    return result
+
+
 def _apply_status(report, results, expected, problems, plan_unknown=False):
     """Compute the final status with ERROR > FAIL > PASS and report problems."""
+    results = [_validated_result_value(result) for result in results]
     results, duplicates = _dedupe(results)
     if duplicates:
         problems.append(
@@ -676,13 +703,23 @@ def _apply_status(report, results, expected, problems, plan_unknown=False):
     if problems:
         report["coverage"]["diagnostics"] = problems
     if status == "ERROR" and report.get("error") is None:
-        primary = next(
-            (problem for problem in problems if problem["code"] != "REPORT_UNEXPECTED_RESULT"),
-            problems[0],
-        )
-        report["error"] = {"code": primary["code"], "message": primary["message"]}
-        if len(problems) > 1:
-            report["error"]["diagnostics"] = {"problems": problems}
+        if problems:
+            primary = next(
+                (problem for problem in problems if problem["code"] != "REPORT_UNEXPECTED_RESULT"),
+                problems[0],
+            )
+            report["error"] = {"code": primary["code"], "message": primary["message"]}
+            if len(problems) > 1:
+                report["error"]["diagnostics"] = {"problems": problems}
+        else:
+            first_error = next(
+                (result.get("error") for result in results if result.get("error")),
+                None,
+            )
+            report["error"] = first_error or {
+                "code": "REPORT_INCOMPLETE",
+                "message": "Report contains results that are not completed successfully",
+            }
     elif status == "ERROR" and isinstance(report.get("error"), dict) and problems:
         diagnostics = report["error"].setdefault("diagnostics", {})
         if isinstance(diagnostics, dict):

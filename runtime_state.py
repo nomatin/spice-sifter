@@ -356,7 +356,24 @@ def _diagnostics(marker, snapshot, reason, recovery_possible=False, extra=None):
     return diagnostics
 
 
-def assess_pending(root=None, process_lookup=None):
+def _any_altium_processes(lookup=None):
+    """Return ``(processes, error)`` for all X2.EXE instances."""
+    lookup = lookup or (lambda: altium_processes(None))
+    try:
+        processes = lookup()
+    except Exception as exc:
+        return None, str(exc)
+    if processes is None:
+        return None, "process query returned no state"
+    if isinstance(processes, dict):
+        processes = [processes]
+    if not isinstance(processes, list):
+        return None, "invalid process query result"
+    return processes, None
+
+
+def assess_pending(root=None, process_lookup=None, altium_lookup=None,
+                   legacy_confirmed=False):
     """Classify the pending marker without modifying it.
 
     States: ``NONE``, ``COMPLETED``, ``STALE``, ``ACTIVE``, ``UNKNOWN``,
@@ -419,7 +436,18 @@ def assess_pending(root=None, process_lookup=None):
         }
 
     if marker.get("_legacy"):
-        if snapshot.get("run_dir_exists"):
+        if not snapshot.get("run_dir_exists"):
+            return {
+                "state": "STALE",
+                "removable": True,
+                "marker": marker,
+                "diagnostics": _diagnostics(
+                    marker, snapshot, "legacy run directory no longer exists", True
+                ),
+                "reason": "Legacy run directory no longer exists",
+            }
+        processes, error = _any_altium_processes(altium_lookup)
+        if error is not None:
             return {
                 "state": "UNKNOWN",
                 "removable": False,
@@ -427,19 +455,41 @@ def assess_pending(root=None, process_lookup=None):
                 "diagnostics": _diagnostics(
                     marker,
                     snapshot,
-                    "legacy marker has no process metadata",
+                    "legacy_process_query_failed: " + error,
                     False,
+                    {"legacy_confirmed": bool(legacy_confirmed)},
                 ),
-                "reason": "Legacy marker cannot prove that Altium finished",
+                "reason": "Cannot verify whether any Altium process is running",
+            }
+        if processes:
+            return {
+                "state": "UNKNOWN",
+                "removable": False,
+                "marker": marker,
+                "diagnostics": _diagnostics(
+                    marker,
+                    snapshot,
+                    "legacy_marker_altium_running",
+                    False,
+                    {
+                        "legacy_confirmed": bool(legacy_confirmed),
+                        "altium_process_count": len(processes),
+                    },
+                ),
+                "reason": "Altium is running; the legacy marker cannot be cleared safely",
             }
         return {
             "state": "STALE",
             "removable": True,
             "marker": marker,
             "diagnostics": _diagnostics(
-                marker, snapshot, "legacy run directory no longer exists", True
+                marker,
+                snapshot,
+                "legacy_marker_no_altium_processes",
+                True,
+                {"legacy_confirmed": bool(legacy_confirmed)},
             ),
-            "reason": "Legacy run directory no longer exists",
+            "reason": "No running Altium process; the legacy marker is stale",
         }
 
     altium_pid = marker.get("altium_pid")
@@ -524,9 +574,9 @@ def assess_pending(root=None, process_lookup=None):
     }
 
 
-def resolve_pending(root=None, process_lookup=None):
+def resolve_pending(root=None, process_lookup=None, altium_lookup=None):
     """Assess the marker and remove it only when proven stale/completed."""
-    assessment = assess_pending(root, process_lookup)
+    assessment = assess_pending(root, process_lookup, altium_lookup)
     if assessment["state"] in ("COMPLETED", "STALE"):
         assessment["removed"] = clear_marker(root)
     else:
@@ -650,15 +700,31 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
             report["altium"]["state"] = "UNKNOWN"
             processes = None
         if processes is not None:
+            if isinstance(processes, dict):
+                processes = [processes]
+            if not isinstance(processes, list):
+                diagnostics.append("Altium process query returned an invalid result.")
+                report["altium"]["state"] = "UNKNOWN"
+                processes = None
+        if processes is not None:
             report["altium"]["processes"] = processes
             report["altium"]["running"] = bool(processes)
-            if processes:
-                report["altium"]["responding"] = all(
-                    process.get("responding") is not False for process in processes
+            if len(processes) > 1:
+                report["altium"]["state"] = "AMBIGUOUS"
+                report["altium"]["responding"] = None
+                diagnostics.append(
+                    "Multiple matching Altium processes; cannot choose one safely."
                 )
-                report["altium"]["state"] = (
-                    "RESPONDING" if report["altium"]["responding"] else "NOT_RESPONDING"
-                )
+            elif len(processes) == 1:
+                responding = processes[0].get("responding")
+                report["altium"]["responding"] = responding
+                if responding is True:
+                    report["altium"]["state"] = "RESPONDING"
+                elif responding is False:
+                    report["altium"]["state"] = "NOT_RESPONDING"
+                else:
+                    report["altium"]["state"] = "UNKNOWN"
+                    diagnostics.append("Altium responsiveness is unknown.")
             else:
                 report["altium"]["state"] = "NOT_RUNNING"
 
@@ -691,16 +757,33 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
     assessment = assess_pending(root)
     report["pending_run"] = _pending_summary(assessment)
 
+    version = report["altium"]["version"]
+    version_supported = isinstance(version, str) and version.startswith("24.4.")
     if not report["altium"]["exists"]:
         status = "ERROR"
+    elif version is None:
+        status = "ERROR"
+        diagnostics.append(
+            "Cannot determine Altium version; compatibility with 24.4.x is unconfirmed."
+        )
+    elif not version_supported:
+        status = "ERROR"
+        diagnostics.append(
+            "Unsupported Altium version: %s; expected 24.4.x." % version
+        )
     elif report["altium"]["state"] == "UNKNOWN":
+        status = "ERROR"
+    elif report["altium"]["state"] == "AMBIGUOUS":
         status = "ERROR"
     elif not report["altium"]["running"]:
         status = "ERROR"
         diagnostics.append("Start the selected Altium Designer before running tests.")
-    elif not report["altium"]["responding"]:
+    elif report["altium"]["responding"] is False:
         status = "BUSY"
         diagnostics.append("Altium is running but not responding.")
+    elif report["altium"]["responding"] is not True:
+        status = "ERROR"
+        diagnostics.append("Altium responsiveness is unknown; readiness is unconfirmed.")
     elif not report["temporary_directory"]["writable"]:
         status = "ERROR"
     elif not report["lock"]["available"]:
@@ -735,12 +818,18 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
     return report
 
 
-def recover_pending(temp_dir=None, process_lookup=None):
+def recover_pending(temp_dir=None, process_lookup=None, altium_lookup=None,
+                    confirm_legacy_stopped=False):
     """Safely clear a pending marker that is proven finished."""
     root = state_root(temp_dir)
     try:
         with acquire_lock(root):
-            assessment = assess_pending(root, process_lookup)
+            assessment = assess_pending(
+                root,
+                process_lookup,
+                altium_lookup,
+                legacy_confirmed=confirm_legacy_stopped,
+            )
             state = assessment["state"]
             base = {
                 "schema_version": "1.0",
@@ -766,6 +855,17 @@ def recover_pending(temp_dir=None, process_lookup=None):
                     status="REFUSED",
                     reason="Previous Altium process is still running; the marker was kept",
                     suggested_action="Wait for Altium to finish, then run recover again",
+                )
+                return base
+            if (
+                state == "UNKNOWN"
+                and (assessment.get("diagnostics") or {}).get("reason")
+                == "legacy_marker_altium_running"
+            ):
+                base.update(
+                    status="REFUSED",
+                    reason="Altium is running; the legacy marker cannot be cleared safely",
+                    suggested_action="Close Altium, verify that no simulation is running, then run recover again",
                 )
                 return base
             base.update(

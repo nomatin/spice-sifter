@@ -46,6 +46,8 @@ python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\A
 - `ERROR` — достоверный результат получить нельзя.
 - `NOT_RUN` — проверка не выполнялась.
 
+Для `PASS`, `FAIL` и `MEASURED` значение `value` обязано быть конечным числом. `null`, `NaN`, `Infinity`, строка или boolean переводят результат в `ERROR` (`RESULT_VALUE_INVALID`/`RESULT_VALUE_MISSING`); итоговый статус пересчитывается.
+
 `coverage.expected` — число запланированных экземпляров проверок и измерений, а не число запусков. Инварианты: `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`. Потеря результата даёт `ERROR / REPORT_INCOMPLETE`; подстановка `PASS` или `0` запрещена. Если проверок по допускам нет, возвращается `validation_status: "NO_ASSERTIONS"`.
 
 Подробный контракт: [REPORT_CONTRACT.md](REPORT_CONTRACT.md).
@@ -56,11 +58,12 @@ python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\A
 python spice_sifter.py doctor
 python spice_sifter.py doctor --json
 python spice_sifter.py recover
+python spice_sifter.py recover --confirm-legacy-stopped
 ```
 
-`doctor` проверяет X2.EXE, версию, запущенный процесс, отзывчивость, блокировку, `pending-run`, временную директорию и ресурсы DbLib, не запуская моделирование. Статусы: `READY`, `BUSY`, `RECOVERY_REQUIRED`, `ERROR`.
+`doctor` проверяет X2.EXE, версию, запущенный процесс, отзывчивость, блокировку, `pending-run`, временную директорию и ресурсы DbLib, не запуская моделирование. Статусы: `READY`, `BUSY`, `RECOVERY_REQUIRED`, `ERROR`. `READY` требует версию `24.4.x` и подтверждённую отзывчивость (`responding = true`); неизвестная версия, `responding = null` и несколько неоднозначных экземпляров не дают `READY`.
 
-`recover` безопасно удаляет `pending-run` только при доказанном завершении предыдущего запуска или завершении процесса Altium. Активная симуляция не прерывается; при неопределённом состоянии выдаётся диагностика и инструкция. Возраст маркера не является основанием для удаления. Подробнее: [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
+`recover` безопасно удаляет `pending-run` только при доказанном завершении предыдущего запуска или завершении процесса Altium. Для старого маркера с одним путём проверяется наличие всех процессов `X2.EXE`; очистка разрешается только при достоверном их отсутствии. `--confirm-legacy-stopped` не обходит эту проверку. Активная симуляция не прерывается; при неопределённом состоянии выдаётся диагностика и инструкция. Возраст маркера не является основанием для удаления. Подробнее: [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
 
 ### Режим DbLib Component
 

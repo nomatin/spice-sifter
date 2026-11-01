@@ -1430,6 +1430,8 @@ def _service_parser(command):
     parser = JSONArgumentParser(prog='spice_sifter.py ' + command)
     parser.add_argument('--altium', default=os.environ.get('SPICE_SIFTER_ALTIUM'))
     parser.add_argument('--json', action='store_true')
+    if command == 'recover':
+        parser.add_argument('--confirm-legacy-stopped', action='store_true')
     return parser
 
 
@@ -1472,7 +1474,9 @@ def _service_main(command, argv):
             _print_doctor_human(report)
         return 0 if report.get('ready') else 2
     from runtime_state import recover_pending
-    report = recover_pending()
+    report = recover_pending(
+        confirm_legacy_stopped=getattr(args, 'confirm_legacy_stopped', False)
+    )
     print(json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')))
     return 0 if report.get('ready') else 2
 

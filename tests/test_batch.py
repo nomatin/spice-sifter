@@ -34,6 +34,77 @@ def blocked_doctor(state="ACTIVE"):
     }
 
 
+def valid_report(status="PASS", value=1.0):
+    result_status = {"PASS": "PASS", "FAIL": "FAIL", "ERROR": "ERROR"}[status]
+    counts = {
+        "passed": 1 if status == "PASS" else 0,
+        "failed": 1 if status == "FAIL" else 0,
+        "measured": 0,
+        "errors": 1 if status == "ERROR" else 0,
+        "not_run": 0,
+    }
+    return {
+        "schema_version": "1.0",
+        "status": status,
+        "validation_status": "ASSERTIONS",
+        "results": [
+            {
+                "result_id": "run_001:check:0",
+                "run_id": "run_001",
+                "kind": "check",
+                "id": 0,
+                "status": result_status,
+                "value": value if status != "ERROR" else None,
+                "unit": None,
+                "limits": {"min": 0, "max": 2},
+                "error": None if status != "ERROR" else {"code": "SOME_ERROR", "message": "x"},
+            }
+        ],
+        "coverage": {
+            "status": "OK",
+            "expected": 1,
+            "completed": 1,
+            "missing": 0,
+            **counts,
+        },
+        "error": None if status != "ERROR" else {"code": "SOME_ERROR", "message": "x"},
+    }
+
+
+def incomplete_report():
+    results = [
+        {
+            "result_id": "run_%03d:check:0" % index,
+            "run_id": "run_%03d" % index,
+            "kind": "check",
+            "id": 0,
+            "status": "PASS",
+            "value": 1.0,
+            "unit": None,
+            "error": None,
+        }
+        for index in range(1, 6)
+    ]
+    return {
+        "schema_version": "1.0",
+        "status": "PASS",
+        "validation_status": "ASSERTIONS",
+        "results": results,
+        "coverage": {
+            "status": "OK",
+            "expected": 14,
+            "completed": 5,
+            "missing": 9,
+            "passed": 5,
+            "failed": 0,
+            "measured": 0,
+            "errors": 0,
+            "not_run": 9,
+        },
+        "error": None,
+    }
+
+
 class BatchTests(unittest.TestCase):
     def test_preflight_blocks_all_twelve_before_launch(self):
         calls = []
@@ -57,9 +128,9 @@ class BatchTests(unittest.TestCase):
 
     def test_ready_batch_runs_and_keeps_results(self):
         reports = {
-            "a": {"status": "PASS", "error": None, "results": []},
-            "b": {"status": "FAIL", "error": None, "results": []},
-            "c": {"status": "PASS", "error": None, "results": []},
+            "a": valid_report("PASS"),
+            "b": valid_report("FAIL", value=3.0),
+            "c": valid_report("PASS"),
         }
 
         def runner(path, **kwargs):
@@ -71,14 +142,69 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(result["summary"]["not_run"], 0)
         self.assertEqual([run["status"] for run in result["runs"]], ["PASS", "FAIL", "PASS"])
 
+    def test_incomplete_report_is_not_accepted_as_pass(self):
+        result = run_batch(
+            ["only"],
+            runner=lambda path, **kwargs: incomplete_report(),
+            doctor=ready_doctor,
+        )
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["error"]["code"], "REPORT_INCOMPLETE")
+        self.assertEqual(result["summary"]["completed_runs"], 0)
+        self.assertEqual(result["summary"]["errors"], 1)
+        self.assertEqual(result["runs"][0]["status"], "ERROR")
+        self.assertIn("report", result["runs"][0]["error"]["diagnostics"])
+
+    def test_contract_invalid_report_is_not_accepted(self):
+        broken = valid_report("PASS")
+        broken.pop("schema_version")
+        result = run_batch(
+            ["only"], runner=lambda path, **kwargs: broken, doctor=ready_doctor
+        )
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["error"]["code"], "REPORT_CONTRACT_INVALID")
+        self.assertEqual(result["summary"]["errors"], 1)
+
+    def test_pass_with_empty_results_is_not_accepted(self):
+        report = {
+            "schema_version": "1.0",
+            "status": "PASS",
+            "validation_status": "ASSERTIONS",
+            "results": [],
+            "coverage": {
+                "status": "OK",
+                "expected": 14,
+                "completed": 5,
+                "missing": 9,
+                "passed": 5,
+                "failed": 0,
+                "measured": 0,
+                "errors": 0,
+                "not_run": 9,
+            },
+            "error": None,
+        }
+        result = run_batch(
+            ["only"], runner=lambda path, **kwargs: report, doctor=ready_doctor
+        )
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(result["error"]["code"], "REPORT_INCOMPLETE")
+        self.assertNotEqual(result["runs"][0]["status"], "PASS")
+
     def test_systemic_error_stops_remaining_series(self):
         calls = []
 
         def runner(path, **kwargs):
             calls.append(path)
             if path == "a":
-                return {"status": "PASS", "error": None}
-            return {"status": "ERROR", "error": {"code": "TIMEOUT", "message": "no status"}}
+                return valid_report("PASS")
+            return {
+                "schema_version": "1.0",
+                "status": "ERROR",
+                "error": {"code": "TIMEOUT", "message": "no status"},
+                "results": [],
+                "coverage": {},
+            }
 
         result = run_batch(["a", "b", "c", "d"], runner=runner, doctor=ready_doctor)
         self.assertEqual(calls, ["a", "b"])

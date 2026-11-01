@@ -210,6 +210,94 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(report["results"][0]["status"], "FAIL")
         self.assertEqual(report["coverage"]["failed"], 1)
 
+    def test_success_status_requires_finite_numeric_value(self):
+        data = divider_data()
+        cases = [
+            ("PASS", None, "RESULT_VALUE_MISSING"),
+            ("PASS", "2.5", "RESULT_VALUE_INVALID"),
+            ("PASS", True, "RESULT_VALUE_INVALID"),
+            ("FAIL", float("nan"), "RESULT_VALUE_INVALID"),
+            ("FAIL", float("inf"), "RESULT_VALUE_INVALID"),
+        ]
+        for status, value, code in cases:
+            with self.subTest(status=status, value=value):
+                report = {
+                    "status": status,
+                    "error": None,
+                    "checks": [dict(data["checks"][0], value=value, passed=status == "PASS")],
+                }
+                finalize_report(report, data)
+                self.assertEqual(report["status"], "ERROR")
+                result = report["results"][0]
+                self.assertEqual(result["status"], "ERROR")
+                self.assertIsNone(result["value"])
+                self.assertEqual(result["error"]["code"], code)
+
+    def test_measured_requires_finite_numeric_value(self):
+        data = divider_data()
+        data["checks"] = []
+        data["measurements"] = [{"id": "m1", "type": "mean", "signal": "v(out)"}]
+        for value, code in [
+            (None, "RESULT_VALUE_MISSING"),
+            ("2.5", "RESULT_VALUE_INVALID"),
+            (float("nan"), "RESULT_VALUE_INVALID"),
+        ]:
+            with self.subTest(value=value):
+                report = {
+                    "status": "PASS",
+                    "error": None,
+                    "run_id": "run_001",
+                    "measurements": [
+                        {
+                            "id": "m1",
+                            "type": "mean",
+                            "value": value,
+                            "unit": "V",
+                            "status": "MEASURED",
+                            "run_id": "run_001",
+                        }
+                    ],
+                }
+                finalize_report(report, data)
+                self.assertEqual(report["status"], "ERROR")
+                result = report["results"][0]
+                self.assertEqual(result["status"], "ERROR")
+                self.assertIsNone(result["value"])
+                self.assertEqual(result["error"]["code"], code)
+
+    def test_valid_values_are_preserved(self):
+        data = divider_data()
+        report = {
+            "status": "PASS",
+            "error": None,
+            "checks": [dict(data["checks"][0], value=2.5, passed=True)],
+        }
+        finalize_report(report, data)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["results"][0]["value"], 2.5)
+
+        data["checks"] = []
+        data["measurements"] = [{"id": "m1", "type": "mean", "signal": "v(out)"}]
+        report = {
+            "status": "PASS",
+            "error": None,
+            "run_id": "run_001",
+            "measurements": [
+                {
+                    "id": "m1",
+                    "type": "mean",
+                    "value": 2.5,
+                    "unit": "V",
+                    "status": "MEASURED",
+                    "run_id": "run_001",
+                }
+            ],
+        }
+        finalize_report(report, data)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["results"][0]["status"], "MEASURED")
+        self.assertEqual(report["results"][0]["value"], 2.5)
+
     def test_component_results_use_same_collection(self):
         data = {
             "name": "component",
