@@ -88,14 +88,24 @@ result = run_batch(
 `batch_agent.run_batch()` не доверяет полю `status`. Перед принятием результата он проверяет:
 
 - `schema_version == "1.0"`;
+- `status` ∈ `PASS`/`FAIL`/`ERROR`;
+- `validation_status` ∈ `ASSERTIONS`/`NO_ASSERTIONS`;
 - наличие `results[]` и `coverage`;
 - `coverage.status == "OK"`;
+- неотрицательные счётчики и инварианты `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`;
 - `coverage.expected == coverage.completed`, `missing == 0`, `not_run == 0`;
 - `len(results) == coverage.expected`;
 - уникальность `result_id`;
-- отсутствие `ERROR`/`NOT_RUN` при заявленном `PASS`;
+- обязательные поля каждого результата: `result_id`, `run_id`, `kind`, `id`, `status`, `value`, `unit`, `error`;
+- `kind` ∈ `check`/`measurement`, `id` — строка или целое число;
+- конечное числовое `value` для `PASS`/`FAIL`/`MEASURED`;
+- `error = null` для `PASS`/`FAIL`/`MEASURED`, объект с `code` и `message` для `ERROR`;
+- `value = null` для `NOT_RUN`;
 - соответствие счётчиков `coverage` фактическим статусам `results[]`;
-- конечное числовое `value` для `PASS`/`FAIL`/`MEASURED`.
+- `PASS` без `FAIL`/`ERROR`/`NOT_RUN`, `FAIL` без `ERROR`/`NOT_RUN` и хотя бы с одним `FAIL`;
+- `error` верхнего уровня: `null` для `PASS`/`FAIL`, объект для `ERROR`.
+
+`REPORT_CONTRACT_INVALID` возвращается при структурных нарушениях и противоречиях статусов, `REPORT_INCOMPLETE` — при потере результатов или неполном coverage. Для `ERROR` допускается ошибка выполнения при полностью сформированном coverage.
 
 Неполный отчёт не может дать `PASS`:
 

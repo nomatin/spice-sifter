@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from batch_agent import run_batch
+from batch_agent import run_batch, validate_report_contract
 from spice_sifter import main
 
 
@@ -190,6 +190,72 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(result["status"], "ERROR")
         self.assertEqual(result["error"]["code"], "REPORT_INCOMPLETE")
         self.assertNotEqual(result["runs"][0]["status"], "PASS")
+
+    def test_pass_with_error_is_contract_invalid(self):
+        report = valid_report("PASS")
+        report["error"] = {"code": "SOME_ERROR", "message": "x"}
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_missing_validation_status_is_contract_invalid(self):
+        report = valid_report("PASS")
+        report.pop("validation_status")
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_missing_result_attribute_is_contract_invalid(self):
+        report = valid_report("PASS")
+        report["results"][0].pop("unit")
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_unknown_kind_is_contract_invalid(self):
+        report = valid_report("PASS")
+        report["results"][0]["kind"] = "other"
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_pass_with_error_result_is_rejected(self):
+        report = valid_report("PASS")
+        report["results"][0] = {
+            "result_id": "run_001:check:0",
+            "run_id": "run_001",
+            "kind": "check",
+            "id": 0,
+            "status": "ERROR",
+            "value": None,
+            "unit": None,
+            "error": {"code": "E", "message": "m"},
+        }
+        report["coverage"].update(passed=0, errors=1)
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_fail_without_fail_result_is_rejected(self):
+        report = valid_report("FAIL")
+        report["results"][0] = valid_report("PASS")["results"][0]
+        report["coverage"].update(passed=1, failed=0)
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_negative_coverage_counter_is_rejected(self):
+        report = valid_report("PASS")
+        report["coverage"]["errors"] = -1
+        ok, code, _ = validate_report_contract(report)
+        self.assertFalse(ok)
+        self.assertEqual(code, "REPORT_CONTRACT_INVALID")
+
+    def test_valid_statuses_pass_contract(self):
+        for status in ("PASS", "FAIL", "ERROR"):
+            with self.subTest(status=status):
+                ok, code, message = validate_report_contract(valid_report(status))
+                self.assertTrue(ok, (code, message))
 
     def test_systemic_error_stops_remaining_series(self):
         calls = []

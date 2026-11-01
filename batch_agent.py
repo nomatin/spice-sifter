@@ -43,6 +43,23 @@ def _finite(value):
     )
 
 
+def _valid_error(value):
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("code"), str)
+        and value["code"] != ""
+        and isinstance(value.get("message"), str)
+    )
+
+
+def _valid_result_id(value):
+    return isinstance(value, str) and value != ""
+
+
+def _valid_result_identifier(value):
+    return isinstance(value, str) or _is_int(value)
+
+
 def validate_report_contract(report):
     """Return ``(ok, code, message)`` for one Spice Sifter report.
 
@@ -53,12 +70,35 @@ def validate_report_contract(report):
         return False, "REPORT_CONTRACT_INVALID", "Report is not a JSON object"
     if report.get("schema_version") != SCHEMA_VERSION:
         return False, "REPORT_CONTRACT_INVALID", "Unsupported or missing schema_version"
+
+    claimed = report.get("status")
+    if claimed not in ("PASS", "FAIL", "ERROR"):
+        return False, "REPORT_CONTRACT_INVALID", "Unknown report status"
+    if report.get("validation_status") not in ("ASSERTIONS", "NO_ASSERTIONS"):
+        return False, "REPORT_CONTRACT_INVALID", "Missing or invalid validation_status"
+
     results = report.get("results")
     coverage = report.get("coverage")
     if not isinstance(results, list):
         return False, "REPORT_CONTRACT_INVALID", "results must be an array"
     if not isinstance(coverage, dict):
         return False, "REPORT_CONTRACT_INVALID", "coverage must be an object"
+
+    error = report.get("error")
+    if claimed in ("PASS", "FAIL"):
+        if error is not None:
+            return (
+                False,
+                "REPORT_CONTRACT_INVALID",
+                "%s report requires error=null" % claimed,
+            )
+    elif not _valid_error(error):
+        return (
+            False,
+            "REPORT_CONTRACT_INVALID",
+            "ERROR report requires an error object with code and message",
+        )
+
     required = (
         "status",
         "expected",
@@ -80,44 +120,106 @@ def validate_report_contract(report):
     for key in required[1:]:
         if not _is_int(coverage.get(key)):
             return False, "REPORT_CONTRACT_INVALID", "coverage.%s must be an integer" % key
+        if coverage[key] < 0:
+            return False, "REPORT_CONTRACT_INVALID", "coverage.%s must be non-negative" % key
     if coverage.get("status") != "OK":
         return False, "REPORT_INCOMPLETE", "coverage.status is not OK"
 
     counts = {status: 0 for status in RESULT_STATUSES}
     seen = set()
+    required_result_fields = (
+        "result_id",
+        "run_id",
+        "kind",
+        "id",
+        "status",
+        "value",
+        "unit",
+        "error",
+    )
     for position, result in enumerate(results):
         if not isinstance(result, dict):
             return False, "REPORT_CONTRACT_INVALID", "results[%d] is not an object" % position
-        result_id = result.get("result_id")
-        if not isinstance(result_id, str) or not result_id:
+        absent = [key for key in required_result_fields if key not in result]
+        if absent:
+            return (
+                False,
+                "REPORT_CONTRACT_INVALID",
+                "results[%d] is missing: %s" % (position, ", ".join(absent)),
+            )
+        result_id = result["result_id"]
+        if not _valid_result_id(result_id):
             return False, "REPORT_CONTRACT_INVALID", "results[%d] has no result_id" % position
         if result_id in seen:
             return False, "REPORT_CONTRACT_INVALID", "Duplicate result_id: " + result_id
         seen.add(result_id)
-        status = result.get("status")
+        if not (result["run_id"] is None or isinstance(result["run_id"], str)):
+            return False, "REPORT_CONTRACT_INVALID", "results[%d].run_id must be string or null" % position
+        if result["kind"] not in ("check", "measurement"):
+            return False, "REPORT_CONTRACT_INVALID", "results[%d] has unknown kind" % position
+        if not _valid_result_identifier(result["id"]):
+            return False, "REPORT_CONTRACT_INVALID", "results[%d].id must be string or integer" % position
+        status = result["status"]
         if status not in RESULT_STATUSES:
             return False, "REPORT_CONTRACT_INVALID", "Unknown result status: " + str(status)
         counts[status] += 1
-        if status in ("PASS", "FAIL", "MEASURED") and not _finite(result.get("value")):
+        value = result["value"]
+        if value is not None and not _finite(value):
             return (
                 False,
                 "REPORT_CONTRACT_INVALID",
-                "Result %s has no valid finite numeric value" % result_id,
+                "Result %s value must be a finite number or null" % result_id,
+            )
+        if not (result["unit"] is None or isinstance(result["unit"], str)):
+            return False, "REPORT_CONTRACT_INVALID", "Result %s unit must be string or null" % result_id
+        result_error = result["error"]
+        if result_error is not None and not _valid_error(result_error):
+            return False, "REPORT_CONTRACT_INVALID", "Result %s has an invalid error object" % result_id
+        if status in ("PASS", "FAIL", "MEASURED"):
+            if not _finite(value):
+                return (
+                    False,
+                    "REPORT_CONTRACT_INVALID",
+                    "Result %s has no valid finite numeric value" % result_id,
+                )
+            if result_error is not None:
+                return (
+                    False,
+                    "REPORT_CONTRACT_INVALID",
+                    "Result %s with status %s requires error=null" % (result_id, status),
+                )
+        elif status == "ERROR":
+            if not _valid_error(result_error):
+                return (
+                    False,
+                    "REPORT_CONTRACT_INVALID",
+                    "Result %s with status ERROR requires an error object" % result_id,
+                )
+        elif status == "NOT_RUN" and value is not None:
+            return (
+                False,
+                "REPORT_CONTRACT_INVALID",
+                "Result %s with status NOT_RUN requires value=null" % result_id,
             )
 
     expected = coverage["expected"]
     completed = coverage["completed"]
+    if expected != completed + coverage["missing"]:
+        return False, "REPORT_CONTRACT_INVALID", "coverage.expected is inconsistent"
+    if completed != (
+        coverage["passed"]
+        + coverage["failed"]
+        + coverage["measured"]
+        + coverage["errors"]
+    ):
+        return False, "REPORT_CONTRACT_INVALID", "coverage.completed is inconsistent"
+    if coverage["missing"] != coverage["not_run"]:
+        return False, "REPORT_CONTRACT_INVALID", "coverage.missing does not match not_run"
     if len(results) != expected:
         return (
             False,
             "REPORT_INCOMPLETE",
             "Expected %d results, collected %d" % (expected, len(results)),
-        )
-    if expected != completed:
-        return (
-            False,
-            "REPORT_INCOMPLETE",
-            "Expected %d results, completed %d" % (expected, completed),
         )
     if coverage["missing"] != 0 or coverage["not_run"] != 0:
         return (
@@ -126,13 +228,6 @@ def validate_report_contract(report):
             "Coverage has missing=%d, not_run=%d"
             % (coverage["missing"], coverage["not_run"]),
         )
-    if completed != (
-        coverage["passed"]
-        + coverage["failed"]
-        + coverage["measured"]
-        + coverage["errors"]
-    ):
-        return False, "REPORT_CONTRACT_INVALID", "coverage.completed is inconsistent"
     for key, status in (
         ("passed", "PASS"),
         ("failed", "FAIL"),
@@ -147,16 +242,17 @@ def validate_report_contract(report):
                 "coverage.%s does not match results[]" % key,
             )
 
-    claimed = report.get("status")
-    if claimed not in ("PASS", "FAIL", "ERROR"):
-        return False, "REPORT_CONTRACT_INVALID", "Unknown report status"
     if claimed == "PASS" and (
-        counts["ERROR"] or counts["NOT_RUN"] or counts["FAIL"]
+        counts["FAIL"] or counts["ERROR"] or counts["NOT_RUN"]
     ):
-        return False, "REPORT_INCOMPLETE", "PASS report contains failed/error/not_run results"
-    if claimed == "FAIL" and (counts["ERROR"] or counts["NOT_RUN"]):
-        return False, "REPORT_INCOMPLETE", "FAIL report contains error/not_run results"
+        return False, "REPORT_CONTRACT_INVALID", "PASS report contradicts results[]"
+    if claimed == "FAIL":
+        if counts["ERROR"] or counts["NOT_RUN"]:
+            return False, "REPORT_CONTRACT_INVALID", "FAIL report contains error/not_run results"
+        if counts["FAIL"] == 0:
+            return False, "REPORT_CONTRACT_INVALID", "FAIL report has no FAIL results"
     return True, None, None
+
 
 
 def _name(test):

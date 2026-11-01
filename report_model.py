@@ -26,10 +26,6 @@ def _finite(value):
     )
 
 
-def _json_number(value):
-    return value if _finite(value) else None
-
-
 def _check_id(check, index):
     """Stable identifier for a check: explicit id or its source array index."""
     if isinstance(check, dict) and "id" in check:
@@ -386,7 +382,7 @@ def _unexpected(result_id, run_id, kind, identifier, row, scope=None):
         "kind": kind,
         "id": identifier,
         "status": "ERROR",
-        "value": _json_number(row.get("value")),
+        "value": row.get("value"),
         "unit": row.get("unit"),
         "error": {
             "code": "REPORT_UNEXPECTED_RESULT",
@@ -530,7 +526,7 @@ def _fallback_results(runs, report):
                     "kind": "check",
                     "id": position,
                     "status": "ERROR",
-                    "value": _json_number(row.get("value")),
+                    "value": row.get("value"),
                     "unit": row.get("unit"),
                     "error": _error_payload(row.get("error"))
                     if row.get("error")
@@ -552,7 +548,7 @@ def _fallback_results(runs, report):
                 "status": row.get("status")
                 if row.get("status") in RESULT_STATUSES
                 else "ERROR",
-                "value": _json_number(row.get("value")),
+                "value": row.get("value"),
                 "unit": row.get("unit"),
                 "error": _error_payload(row.get("error"))
                 if row.get("error")
@@ -610,11 +606,18 @@ def _has_assertions(data, results):
 
 
 def _validated_result_value(result):
-    """Enforce a finite numeric value for PASS/FAIL/MEASURED results."""
+    """Enforce a finite numeric value for PASS/FAIL/MEASURED results.
+
+    The raw value is preserved by the result builders so that an absent/null
+    value (``RESULT_VALUE_MISSING``) can be distinguished from a present but
+    invalid value such as NaN, Infinity, a string or a boolean
+    (``RESULT_VALUE_INVALID``).
+    """
     status = result.get("status")
+    present = "value" in result
     value = result.get("value")
     if status in ("PASS", "FAIL", "MEASURED"):
-        if value is None:
+        if not present or value is None:
             code = "RESULT_VALUE_MISSING"
             message = "Result has no numeric value"
         elif isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -631,6 +634,7 @@ def _validated_result_value(result):
         or not isinstance(value, (int, float))
         or not math.isfinite(value)
     ):
+        # Never let NaN/Infinity or non-numeric data reach the final JSON.
         result["value"] = None
     return result
 

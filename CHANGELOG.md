@@ -1,5 +1,12 @@
 # История изменений
 
+## 0.6.2 — Value classification and strict batch contract
+
+- `report_model.py` различает отсутствующее/`null` значение (`RESULT_VALUE_MISSING`) и присутствующее недопустимое значение — `NaN`, `Infinity`, `-Infinity`, строка, boolean (`RESULT_VALUE_INVALID`). Исходное значение проверяется до нормализации; `NaN`/`Infinity` не попадают в финальный JSON, корректные числа (включая `0`) сохраняются.
+- `batch_agent.validate_report_contract()` проверяет полный опубликованный контракт: `validation_status`, обязательные поля результатов, `kind`, `id`, `unit`, согласованность `error` со статусом, `value = null` для `NOT_RUN`, неотрицательные счётчики, инварианты coverage, отсутствие противоречий `PASS`/`FAIL` и точное соответствие счётчиков фактическим статусам.
+- Структурные нарушения и противоречия статусов дают `REPORT_CONTRACT_INVALID`; потеря результатов и неполный coverage — `REPORT_INCOMPLETE`.
+- Добавлены локальные unit-тесты для всех перечисленных случаев. Altium, MixedSim и полная регрессия не запускались.
+
 ## 0.6.1 — Review fixes
 
 - Пакетный агрегатор `batch_agent.run_batch()` больше не доверяет полю `status`: перед принятием проверяются `schema_version`, `results[]`, `coverage`, уникальность `result_id`, счётчики и отсутствие `ERROR`/`NOT_RUN` при заявленном `PASS`. Неполный отчёт даёт `REPORT_INCOMPLETE`, структурное нарушение — `REPORT_CONTRACT_INVALID`; оригинальный отчёт сохраняется в диагностике.
