@@ -33,6 +33,29 @@ python spice_sifter.py examples/dblib_resistor_r0009.json
 
 `component.library` должен быть **полным абсолютным путём** к существующему файлу `.DbLib`; путь в примере демонстрационный, замените его на локальный. Автоматического поиска библиотеки по имени нет. Для DbLib-режима доступны `fixture`: `resistor_dc`, `diode_forward`, `diode_reverse`. Рабочие файлы каждого запуска остаются в `temp/dblib_runs/<run_id>/`; исходный шаблон не изменяется. Ошибки очистки или сохранения очищенного SchDoc переводят результат в `ERROR`.
 
+### Многовыводные компоненты
+
+Вместо `fixture` можно задать `spice` и `pins`. DUT загружается только из DbLib; из `spice` размещаются элементы оснастки V/I/R/C/L, а `{{DUT}}` заменяется реальным компонентом. `pins` сопоставляет **designator вывода УГО** с именем сети; `null` означает явно неподключённый вывод.
+
+```json
+{
+  "name": "dblib_mosfet_vt0001",
+  "component": {
+    "library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib",
+    "table": "Транзисторы",
+    "id": "VT0001",
+    "designator": "Q1",
+    "pins": {"1": "GATE", "2": "GND", "3": "DRAIN"}
+  },
+  "spice": "* 2N7002 DC test\nVDD VDD 0 DC 5\nVG GATE 0 DC 3\nR1 VDD DRAIN 1k\n{{DUT}}\n.OP\n.END\n",
+  "checks": [{"analysis": "op", "signal": "v(drain)", "measurement": "first", "min": 0, "max": 1}]
+}
+```
+
+Поддерживаются `V`, `I`, `R`, `C`, `L`, `{{DUT}}`, а также одна директива `.OP`, `.AC` или `.TRAN`; `.OPTIONS` — только `METHOD`, `SPICEREFNODE`, `DVCC`, `DVDD`. Неизвестные элементы и директивы отклоняются с `FIXTURE_*` ошибкой до моделирования. Количество выводов определяется из загруженного компонента, а не из JSON. `component.designator` задаёт designator DUT в NSX.
+
+Ограничения текущего этапа: `.DC` в проектом режиме Altium не выполняется и отклоняется как `FIXTURE_ANALYSIS_UNSUPPORTED`; AC-проверки импеданса требуют токовых probe и в этой оснастке пока недоступны. BJT-приёмка отмечена `BLOCKED`: в `MY_LIB` нет BJT.
+
 ## Требования
 
 Windows 10/11, Python 3.11+ и установленный Altium Designer 24.4. Дополнительные Python-пакеты и проекты Altium не требуются.

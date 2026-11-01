@@ -54,12 +54,21 @@ class InputTests(unittest.TestCase):
             self.assertNotIn("spice", data)
             self.assertEqual(data["component"]["id"], "R0009")
 
-    def test_mutually_exclusive_spice_and_component(self):
+    def test_component_with_spice_fixture_accepted(self):
+        data = component_data()
+        data.pop("fixture")
+        data["component"]["pins"] = {"1": "DUT_P", "2": "GND"}
+        data["spice"] = (
+            "* resistor fixture\n"
+            "V1 DUT_P 0 DC 1\n"
+            "{{DUT}}\n"
+            ".OP\n.END\n"
+        )
+        data["checks"] = [{"analysis": "op", "signal": "v(dut_p)",
+                           "measurement": "first", "min": -1.1, "max": -0.9}]
         with tempfile.TemporaryDirectory() as td:
-            data = component_data(spice="* test\n.OP\n.END")
-            with self.assertRaises(TestError) as ctx:
-                load_test(write_json(td, "both.json", data))
-            self.assertEqual(ctx.exception.code, "INPUT_INVALID")
+            parsed = load_test(write_json(td, "spice_component.json", data))
+        self.assertEqual(parsed["component"]["pins"]["1"], "DUT_P")
 
     def test_required_component_fields(self):
         for field in ("library", "page", "id"):
@@ -216,6 +225,67 @@ class NetlistTests(unittest.TestCase):
             checks = dr.verify_netlist(nsx, "MY_LIB_R_TCR")
             self.assertFalse(checks["model_definition"])
             self.assertFalse(checks["all"])
+
+    def test_arbitrary_pin_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            nsx = Path(td) / "test.nsx"
+            nsx.write_text(
+                "XQ1 GATE 0 DRAIN MY_LIB_NMOS_DS PARAMS: VTO=2\n"
+                ".SUBCKT MY_LIB_NMOS_DS 1 2 3\n.ENDS\n.END\n",
+                encoding="utf-8",
+            )
+            checks = dr.verify_netlist(
+                nsx, "MY_LIB_NMOS_DS", ("GATE", "GND", "DRAIN"),
+                {"GATE", "GND", "DRAIN"},
+            )
+            self.assertTrue(checks["port_count_matches"], checks)
+            self.assertTrue(checks["pin_order_matches"], checks)
+            self.assertTrue(checks["all"], checks)
+
+    def test_unconnected_port_must_not_join_assigned_net(self):
+        with tempfile.TemporaryDirectory() as td:
+            nsx = Path(td) / "test.nsx"
+            nsx.write_text(
+                "XU1 VCC GND IN OUT1 OUT2 NetU1_6 MY_LIB_IC\n"
+                ".SUBCKT MY_LIB_IC 1 2 3 4 5 6\n.ENDS\n.END\n",
+                encoding="utf-8",
+            )
+            expected = ("VCC", "GND", "IN", "OUT1", "OUT2", None)
+            assigned = {"VCC", "GND", "IN", "OUT1", "OUT2"}
+            checks = dr.verify_netlist(nsx, "MY_LIB_IC", expected, assigned)
+            self.assertTrue(checks["all"], checks)
+            nsx.write_text(
+                "XU1 VCC GND IN OUT1 OUT2 OUT1 MY_LIB_IC\n"
+                ".SUBCKT MY_LIB_IC 1 2 3 4 5 6\n.ENDS\n.END\n",
+                encoding="utf-8",
+            )
+            checks = dr.verify_netlist(nsx, "MY_LIB_IC", expected, assigned)
+            self.assertFalse(checks["unassigned_ports_not_connected"])
+            self.assertFalse(checks["all"])
+
+    def test_expected_nodes_from_real_port_map(self):
+        readback = {
+            "sim_port_map": "(2:2),(3:3),(1:1)",
+            "pin_map": {"1": "GATE", "2": "GND", "3": "DRAIN"},
+        }
+        nodes, assigned = dr.expected_nodes_from_port_map(readback, readback["pin_map"])
+        self.assertEqual(nodes, ("GATE", "GND", "DRAIN"))
+        self.assertEqual(assigned, {"GATE", "GND", "DRAIN"})
+
+    def test_port_map_rejects_assigned_pin_not_in_model(self):
+        readback = {
+            "sim_port_map": "(1:1),(2:2)",
+            "pin_map": {"1": "A", "2": "K", "3": "EP"},
+        }
+        with self.assertRaises(dr.DblibError) as ctx:
+            dr.expected_nodes_from_port_map(readback, readback["pin_map"])
+        self.assertEqual(ctx.exception.code, "COMPONENT_SIM_PORT_MAP_INVALID")
+
+    def test_port_map_rejects_duplicate_or_gapped_ports(self):
+        for text in ("(1:1),(2:1)", "(1:2)", "(1:0)"):
+            with self.subTest(text=text), self.assertRaises(dr.DblibError) as ctx:
+                dr.parse_port_map(text)
+            self.assertEqual(ctx.exception.code, "COMPONENT_SIM_PORT_MAP_INVALID")
 
 
 class ReportGuardTests(unittest.TestCase):

@@ -51,16 +51,40 @@ python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\A
 
 - `library` — только полный абсолютный путь к существующему файлу `.DbLib`. Относительные пути, одно имя файла и автоматический поиск по каталогам не поддерживаются: возвращается `LIBRARY_PATH_INVALID`. Путь из примера демонстрационный, замените его на локальный.
 - `page` — имя страницы Excel. Символ `$` для таблицы DbLib добавляется автоматически, повторно не дублируется.
-- `id` — исходное значение ключевой колонки `ID`, а не Designator или MPN. Одновременно указывать `spice` и `component` запрещено.
-- `fixture` обязателен: `resistor_dc` (1 А, `.OP`), `diode_forward` (−10 мА) или `diode_reverse` (+10 мА). Первые два используются для положительных проверок; обратное включение диода с прямыми допусками даёт ожидаемый `FAIL`.
+- `id` — исходное значение ключевой колонки `ID`, а не Designator или MPN.
+- `fixture` обязателен для старого двухвыводного режима: `resistor_dc` (1 А, `.OP`), `diode_forward` (−10 мА) или `diode_reverse` (+10 мА). Первые два используются для положительных проверок; обратное включение диода с прямыми допусками даёт ожидаемый `FAIL`.
 
-Проверяются ровно два вывода, наличие SIM Implementation и Sim Port Map, совпадение ID/библиотеки/таблицы, связность цепей, сформированный Altium NSX и SDF текущего запуска. Проверки, `measurements` и `output.graphs` используют общий SDF-парсер, Validator и Measurement Engine. `sweep` и температурные серии в DbLib-режиме пока не поддерживаются и отклоняются до симуляции.
+Для многовыводных компонентов вместо `fixture` задаются `spice` и `pins`:
+
+```json
+{
+  "name": "dblib_mosfet_vt0001",
+  "component": {
+    "library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib",
+    "table": "Транзисторы",
+    "id": "VT0001",
+    "designator": "Q1",
+    "pins": {"1": "GATE", "2": "GND", "3": "DRAIN"}
+  },
+  "spice": "* 2N7002 DC test\nVDD VDD 0 DC 5\nVG GATE 0 DC 3\nR1 VDD DRAIN 1k\n{{DUT}}\n.OP\n.END\n",
+  "checks": [{"analysis": "op", "signal": "v(drain)", "measurement": "first", "min": 0, "max": 1}]
+}
+```
+
+- `table` — то же, что `page`; `$` добавляется автоматически.
+- `pins` — произвольное число пар «designator вывода УГО → сеть». `null` означает явно неподключённый вывод; отсутствие вывода в `pins` — ошибка `COMPONENT_PIN_UNASSIGNED`.
+- `spice` — минимальная оснастка: V/I/R/C/L и ровно один `{{DUT}}`, плюс одна директива `.OP`, `.AC` или `.TRAN`. `.OPTIONS` — только `METHOD`, `SPICEREFNODE`, `DVCC`, `DVDD`. Неизвестные элементы/директивы дают `FIXTURE_*` до симуляции.
+- Количество выводов берётся из загруженного компонента; порядок перечисления не считается нумерацией. `component.designator` задаёт designator DUT в NSX.
+
+Проверяются наличие SIM Implementation и Sim Port Map, совпадение ID/библиотеки/таблицы, покрытие всех выводов, связность цепей, порядок узлов в NSX по реальному Sim Port Map и SDF текущего запуска. Проверки, `measurements` и `output.graphs` используют общий SDF-парсер, Validator и Measurement Engine. `sweep` и температурные серии в DbLib-режиме пока не поддерживаются и отклоняются до симуляции.
+
+Ограничения: `.DC` в проектом режиме отклоняется как `FIXTURE_ANALYSIS_UNSUPPORTED`; AC impedance требует токовых probe; многосекционные УГО дают `MULTIPART_UNSUPPORTED`. BJT-приёмка отмечена `BLOCKED`, поскольку в `MY_LIB` нет BJT.
 
 Созданные DUT, Wire и Net Label удаляются по журналу после любого исхода; вкладки и документы Altium не закрываются. Успешная очистка требует подтверждённого удаления объектов, сохранения постоянных элементов схемы и успешного `DoFileSave()` очищенного SchDoc. Ошибка удаления или сохранения переводит результат в `ERROR` с `SCHEMATIC_CLEANUP_FAILED`; исходная ошибка симуляции при этом сохраняется в диагностике. Рабочие файлы всегда остаются в `temp/dblib_runs/<run_id>/` (`report.json`, `status.txt`, NSX, SDF). Исходный шаблон `dblib_resources/template` не изменяется.
 
 Если MixedSim сформировал несколько графиков с одинаковым анализом и набором сигналов, они сравниваются полностью: имена, единицы, тип данных, количество точек, массивы X/Y и комплексные составляющие. Идентичные дубликаты схлопываются, а различающиеся дают `ERROR / SDF_DUPLICATE_CONFLICT`.
 
-Отчёт дополнительно содержит `component`, `run_id`, `stages`, `artifacts` и `error`. Типовые коды ошибок: `LIBRARY_PATH_INVALID`, `LIBRARY_NOT_FOUND`, `PAGE_NOT_FOUND`, `COMPONENT_ID_NOT_FOUND`, `MISSING_SIMULATION_MODEL`, `SIM_PORT_MAP_MISSING`, `CONNECTIVITY_FAILED`, `NSX_NOT_GENERATED`, `NSX_INVALID`, `SDF_NOT_SAVED`, `SDF_DUPLICATE_CONFLICT`, `SCHEMATIC_CLEANUP_FAILED`.
+Отчёт дополнительно содержит `component`, `run_id`, `stages`, `artifacts` и `error`. Типовые коды ошибок: `LIBRARY_PATH_INVALID`, `LIBRARY_NOT_FOUND`, `PAGE_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `COMPONENT_NO_PINS`, `COMPONENT_PIN_NOT_FOUND`, `COMPONENT_PIN_AMBIGUOUS`, `COMPONENT_PIN_UNASSIGNED`, `COMPONENT_PIN_CONNECTION_FAILED`, `COMPONENT_NETLIST_MISMATCH`, `COMPONENT_SIM_MODEL_MISSING`, `COMPONENT_SIM_PORT_MAP_INVALID`, `MULTIPART_UNSUPPORTED`, `FIXTURE_ELEMENT_UNSUPPORTED`, `FIXTURE_ANALYSIS_UNSUPPORTED`, `MISSING_SIMULATION_MODEL`, `SIM_PORT_MAP_MISSING`, `CONNECTIVITY_FAILED`, `NSX_NOT_GENERATED`, `NSX_INVALID`, `SDF_NOT_SAVED`, `SDF_DUPLICATE_CONFLICT`, `SCHEMATIC_CLEANUP_FAILED`.
 
 ### Формат теста
 

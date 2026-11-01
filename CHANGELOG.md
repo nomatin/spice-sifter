@@ -11,6 +11,12 @@
 - Приёмочные входы и отчёты перенесены в `temp/dblib_acceptance/<acceptance_id>/`; путь к библиотеке задаётся через `SPICE_SIFTER_DBLIB_PATH`.
 - Добавлена лицензия GNU GPL-3.0-only: файл `LICENSE`, SPDX-заголовки в собственных Python-файлах и раздел «License / Лицензия» в README.
 - Исправлен расчёт RMS: вместо трапеций по квадратам отсчётов используется точное аналитическое интегрирование квадрата кусочно-линейно интерполированного сигнала. Добавлены математические тесты RMS.
+- DbLib Component расширен на многовыводные компоненты: `component.spice` + `component.pins` + `{{DUT}}`, динамическое чтение выводов, произвольные designators и `null` для явно неподключённых выводов.
+- Добавлен минимальный генератор SchDoc из `spice` для V/I/R/C/L и одна директива `.OP`/`.AC`/`.TRAN`; `dblib_resources/template_empty` и `dblib_resources/dblib_fixture.pas`.
+- Добавлены проверки: `COMPONENT_NOT_FOUND`, `COMPONENT_NO_PINS`, `COMPONENT_PIN_NOT_FOUND`, `COMPONENT_PIN_AMBIGUOUS`, `COMPONENT_PIN_UNASSIGNED`, `COMPONENT_PIN_CONNECTION_FAILED`, `COMPONENT_NETLIST_MISMATCH`, `COMPONENT_SIM_MODEL_MISSING`, `COMPONENT_SIM_PORT_MAP_INVALID`, `MULTIPART_UNSUPPORTED`.
+- Pin Mapping проверяется по реальному Sim Port Map и порядку узлов в Altium NSX, а не по порядку перечисления выводов.
+- Добавлена multi-pin приёмка `tests/acceptance_dblib_multipin.py` (3-выводный MOSFET, 6-выводная ИС, null/shared/bad/missing pin, unsupported spice). BJT — `BLOCKED`: в библиотеке нет BJT.
+- Ограничения: `.DC` в проектом режиме отклоняется как `FIXTURE_ANALYSIS_UNSUPPORTED`; AC impedance требует токовых probe; многосекционные УГО отклоняются.
 
 ## Переименование проекта
 

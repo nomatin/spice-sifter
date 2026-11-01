@@ -25,8 +25,6 @@ def load_test(path,max_runs=100):
             raise ValueError('Expected an object')
         if not isinstance(data.get('name'), str) or not data['name'].strip():
             raise ValueError('name must be a nonempty string')
-        if 'spice' in data and 'component' in data:
-            raise ValueError('spice and component are mutually exclusive')
         if 'component' in data:
             return load_component_test(data)
         if not isinstance(data.get('spice'), str) or not data['spice'].strip():
@@ -74,15 +72,47 @@ def validate_checks(checks):
 
 def load_component_test(data):
     from dblib_runner import FIXTURES
+    from dblib_fixture import FixtureError, parse_spice_fixture, validate_pin_map
     component = data.get('component')
     if not isinstance(component, dict):
         raise ValueError('component must be an object')
-    for key in ('library', 'page', 'id'):
+    for key in ('library', 'id'):
         if not isinstance(component.get(key), str) or not component[key].strip():
             raise ValueError('component.' + key + ' must be a nonempty string')
-    fixture = data.get('fixture')
-    if not isinstance(fixture, str) or fixture not in FIXTURES:
-        raise ValueError('component mode requires a supported fixture: ' + ', '.join(sorted(FIXTURES)))
+    page = component.get('page') if 'page' in component else component.get('table')
+    if not isinstance(page, str) or not page.strip():
+        raise ValueError('component.page or component.table must be a nonempty string')
+    component['page'] = page.strip()
+    designator = component.get('designator')
+    if designator is not None:
+        if not isinstance(designator, str) or not designator.strip():
+            raise ValueError('component.designator must be a nonempty string')
+        if any(ch in designator for ch in '|\r\n'):
+            raise ValueError('component.designator contains a forbidden character')
+
+    spice = data.get('spice')
+    if spice is not None:
+        if not isinstance(spice, str) or not spice.strip():
+            raise ValueError('spice must be a nonempty string when present')
+        pins = component.get('pins')
+        if not isinstance(pins, dict) or not pins:
+            raise ValueError('component.pins is required in spice fixture mode')
+        if 'fixture' in data:
+            raise ValueError('fixture is not used when component.spice is present')
+        try:
+            plan = parse_spice_fixture(spice)
+            validate_pin_map(pins, plan)
+        except FixtureError as exc:
+            raise TestError(exc.code, exc.message) from exc
+    else:
+        fixture = data.get('fixture')
+        if not isinstance(fixture, str) or fixture not in FIXTURES:
+            raise ValueError('component mode requires a supported fixture or component.spice: ' + ', '.join(sorted(FIXTURES)))
+        if 'pins' in component:
+            raise ValueError('component.pins requires component.spice')
+        if 'designator' in component:
+            raise ValueError('component.designator requires component.spice')
+
     if 'sweep' in data:
         raise ValueError('sweep is not supported in component mode')
     if data.get('models'):
