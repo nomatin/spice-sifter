@@ -1,5 +1,35 @@
 # История изменений
 
+## 0.7.0 — Hidden Altium instance
+
+- Добавлен `hidden_instance.py`: управляемый экземпляр Altium Designer на
+  отдельном невидимом Win32 Desktop (`CreateDesktopW`, `CreateProcessW` с
+  `STARTUPINFO.lpDesktop`, Job Object с `KILL_ON_JOB_CLOSE`). Идентичность
+  процесса — PID + время создания; `WM_CLOSE`, `SwitchDesktop`, `SendInput` и
+  `taskkill` не используются.
+- `--altium-instance {current,hidden}` для одиночного запуска, `doctor` и
+  `batch_agent.py`. По умолчанию — `current`, прежнее поведение не изменено.
+- Все команды `-R`, включая дополнительный `collect.pas`, направляются через
+  launcher: в hidden-режиме они создаются на скрытом Desktop, в current —
+  прежним `subprocess.Popen`.
+- `batch_agent.run_batch(..., altium_instance="hidden")`: один экземпляр на
+  пачку, `START → READY → Test 1..N → STOP`, завершение в `finally`, свежий
+  экземпляр при следующем вызове. Системные ошибки `HIDDEN_*` останавливают
+  серию с `NOT_RUN`, уже полученные отчёты сохраняются.
+- Блокировка: пачка удерживает существующий `altium.lock` на всю серию;
+  вложенный запуск скрипта в том же процессе не блокируется повторно,
+  независимый запуск Spice Sifter — блокируется.
+- `runtime_state.py`: запись скрытого сеанса, проверка PID + времени создания,
+  `doctor` для hidden-режима (без требования запущенного Altium), безопасный
+  `recover` для устаревшей записи сеанса. Новые поля диагностики не удаляют
+  существующие.
+- Отчёт: необязательное поле `altium_session` (Desktop, PID, время создания,
+  READY, команды, причина завершения); контракт `results[]`/`coverage` не
+  изменён.
+- Добавлены unit-тесты `tests/test_hidden.py` (27 тестов) и исправлен
+  существующий фикстур `test_filter_graphs_no_checks_and_fail`, который нарушал
+  контракт отчёта (FAIL без числового `value`).
+
 ## 0.6.3 — JSON-safe report finalization
 
 - `report_model.finalize_report()` теперь рекурсивно очищает весь отчёт перед возвратом: `results[]`, `checks[]`, `measurements[]`, `runs[]`, `coverage`, `summary`, `graphs`, `diagnostics`, `error` и произвольные вложенные словари/массивы.

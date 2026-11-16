@@ -31,6 +31,8 @@ python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\A
 | Параметр | Назначение |
 |---|---|
 | `--altium PATH` | Путь к выбранному X2.EXE |
+| `--altium-instance {current,hidden}` | `current` (по умолчанию) работает с открытым Altium; `hidden` запускает собственный экземпляр на скрытом Desktop |
+| `--ready-timeout SECONDS` | Таймаут запуска скрытого Altium, по умолчанию 120 секунд |
 | `--timeout SECONDS` | Ограничение ожидания скрипта, по умолчанию 120 секунд |
 | `--keep-files` | Сохранить временные файлы и добавить их путь в отчёт |
 | `--verbose` | Вывести диагностику в stderr |
@@ -64,6 +66,30 @@ python spice_sifter.py recover --confirm-legacy-stopped
 `doctor` проверяет X2.EXE, версию, запущенный процесс, отзывчивость, блокировку, `pending-run`, временную директорию и ресурсы DbLib, не запуская моделирование. Статусы: `READY`, `BUSY`, `RECOVERY_REQUIRED`, `ERROR`. `READY` требует версию `24.4.x` и подтверждённую отзывчивость (`responding = true`); неизвестная версия, `responding = null` и несколько неоднозначных экземпляров не дают `READY`.
 
 `recover` безопасно удаляет `pending-run` только при доказанном завершении предыдущего запуска или завершении процесса Altium. Для старого маркера с одним путём проверяется наличие всех процессов `X2.EXE`; очистка разрешается только при достоверном их отсутствии. `--confirm-legacy-stopped` не обходит эту проверку. Активная симуляция не прерывается; при неопределённом состоянии выдаётся диагностика и инструкция. Возраст маркера не является основанием для удаления. Подробнее: [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
+
+### Скрытый экземпляр Altium
+
+```powershell
+# Один тест: Spice Sifter запускает и завершает собственный Altium
+python spice_sifter.py examples/dblib_resistor_r0009.json --altium-instance hidden
+
+# Проверка готовности hidden-режима (Altium запускать не нужно)
+python spice_sifter.py doctor --altium-instance hidden --json
+
+# Пачка: один экземпляр на серию, свежий при следующем вызове
+python batch_agent.py temp/inputs/a.json temp/inputs/b.json `
+  --altium-instance hidden --timeout 180 --ready-timeout 120
+```
+
+В hidden-режиме рабочий Altium можно оставить открытым: Spice Sifter не
+закрывает его, не перезапускает и не отправляет ему скрипты. Собственный
+экземпляр создаётся на Desktop `SpiceSifterHidden-<id>` и завершается через
+собственный Job Object. Каждая команда `-R`, включая дополнительный
+`collect.pas`, исполняется только скрытым экземпляром. Требуются Altium 24.4.x,
+интерактивный сеанс и свободный лицензионный слот. При аварии `doctor` вернёт
+`RECOVERY_REQUIRED`, а `recover` удалит запись только после доказанного
+завершения процесса. Подробности и коды ошибок — в
+[README](../README.md#скрытый-экземпляр-altium).
 
 ### Режим DbLib Component
 

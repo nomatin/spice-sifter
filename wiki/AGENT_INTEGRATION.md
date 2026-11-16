@@ -66,6 +66,38 @@ result = run_batch(
 )
 ```
 
+По умолчанию (`altium_instance="current"`) агент не запускает Altium: нужен
+заранее открытый и отзывчивый экземпляр, как раньше.
+
+### Скрытый режим пачки
+
+```python
+result = run_batch(
+    ["temp/inputs/r0009.json", "temp/inputs/r0020.json"],
+    altium_instance="hidden",
+    timeout=180,
+    ready_timeout=120,
+)
+```
+
+или из командной строки:
+
+```powershell
+python batch_agent.py temp/inputs/r0009.json temp/inputs/r0020.json `
+  --altium-instance hidden --timeout 180 --ready-timeout 120
+```
+
+Последовательность: `BATCH START → doctor(hidden) → START → READY → Test 1..N →
+STOP`. Один экземпляр обслуживает всю серию; повторный вызов создаёт новый.
+Завершение выполняется в `finally`, уже полученные отчёты сохраняются.
+`result.altium_session` содержит Desktop, PID, время создания, время READY,
+запущенные команды и причину завершения; на JSON-контракт `results[]` это не
+влияет.
+
+Скрытый режим не ищет и не выбирает уже работающий `X2.EXE`: идентификатор —
+только собственный PID + время создания. Наличие нескольких экземпляров Altium
+не переводит такой сеанс в `AMBIGUOUS`.
+
 При недоступном Altium:
 
 ```json
@@ -139,10 +171,19 @@ result = run_batch(
 - `ALTIUM_NOT_RUNNING`
 - `ALTIUM_STATE_UNKNOWN`
 - `ALTIUM_PENDING_RUN`
+- `HIDDEN_DESKTOP_UNAVAILABLE`
+- `HIDDEN_LAUNCH_FAILED`
+- `HIDDEN_READY_TIMEOUT`
+- `HIDDEN_BLOCKING_DIALOG`
+- `HIDDEN_PROCESS_LOST`
+- `HIDDEN_SCRIPT_NOT_ROUTED`
+- `HIDDEN_SCRIPT_TIMEOUT`
+- `HIDDEN_STATE_AMBIGUOUS`
+- `HIDDEN_STOP_FAILED`
 
 агент останавливает оставшуюся серию. Уже завершённые отчёты сохраняются, остальные помечаются `NOT_RUN`. `batch_agent.run_batch()` делает это автоматически.
 
-Каждый отдельный запуск Spice Sifter всё равно берёт собственную межпроцессную блокировку: состояние Altium может измениться после preflight.
+Каждый отдельный запуск Spice Sifter всё равно берёт собственную межпроцессную блокировку: состояние Altium может измениться после preflight. Пачка в hidden-режиме удерживает ту же блокировку на всё время серии; вложенный запуск скрипта внутри процесса не блокируется повторно, а независимый второй запуск Spice Sifter — блокируется.
 
 ## Диагностика зависшего запуска
 
@@ -244,5 +285,9 @@ python spice_sifter.py recover --confirm-legacy-stopped
 3. Запустить серию.
 4. При системной ошибке остановить серию, сохранить завершённые отчёты, остальные пометить `NOT_RUN`.
 5. Читать `results[]` и `coverage`, а не вычислять ожидаемое число измерений по косвенным признакам.
+
+Для автоматических пачек рекомендуемый режим — `hidden`; в нём preflight
+выполняется как `python spice_sifter.py doctor --altium-instance hidden --json`,
+а запущенный рабочий Altium не требуется.
 
 Контракт отчёта: [REPORT_CONTRACT.md](REPORT_CONTRACT.md).
