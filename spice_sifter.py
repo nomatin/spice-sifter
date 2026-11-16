@@ -5,7 +5,7 @@ Automatic measurements, parameter/temperature series, AC impedance and graph exp
 Validated against Altium Designer 24.4.1.13 on Windows.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 import json
 import math
@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 
 class TestError(Exception):
     def __init__(self, code, message, diagnostics=None, suggested_action=None):
@@ -632,8 +633,18 @@ def read_status(path):
 @contextmanager
 def altium_session():
     """Shared Altium lock and safe pending-run recovery for every runner mode."""
-    from runtime_state import MarkerError, acquire_lock, batch_lock_held, resolve_pending
-    root = Path(tempfile.gettempdir()) / 'SpiceSifter'
+    from runtime_state import (
+        MarkerError, acquire_lock, batch_lock_held, batch_lock_owner,
+        current_state_root, resolve_pending,
+    )
+    root = current_state_root()
+    owner = batch_lock_owner(root)
+    if owner is not None and owner != threading.get_ident():
+        raise TestError(
+            'BUSY',
+            'Another thread in this process holds the Altium lock',
+            suggested_action='Run one batch per process thread',
+        )
     if batch_lock_held(root):
         # A batch already owns the Altium lock for the whole hidden session.
         # Re-acquiring the same msvcrt byte range would deadlock this process.
@@ -682,8 +693,8 @@ def with_altium_session(function):
 
 @with_altium_session
 def run_altium(exe, data, base, timeout, keep, report, verbose=False, launcher=None):
-    from runtime_state import clear_marker, utc_now, write_marker
-    root = Path(tempfile.gettempdir()) / 'SpiceSifter'
+    from runtime_state import clear_marker, current_state_root, utc_now, write_marker
+    root = current_state_root()
     work = root / uuid.uuid4().hex
     work.mkdir()
     if 'temperature_c' in report or 'parameters' in report or '_measurement_requests' in report:report['run_id']=work.name
@@ -1505,33 +1516,78 @@ def _select_altium(exe):
     return exe
 
 
+def _ensure_no_previous_hidden_session(root):
+    """Refuse a new hidden instance when the previous one is not proven gone."""
+    from runtime_state import (
+        assess_hidden_session, clear_hidden_session, resolve_pending,
+    )
+    from hidden_instance import HIDDEN_STATE_AMBIGUOUS
+
+    pending = resolve_pending(root)
+    _check_pending_state(pending)
+
+    assessment = assess_hidden_session(root)
+    state = assessment.get("state")
+    diagnostics = assessment.get("diagnostics") or {
+        "state": state,
+        "reason": assessment.get("reason"),
+        "session_id": (assessment.get("session") or {}).get("session_id"),
+    }
+    if state == "ACTIVE":
+        raise TestError(
+            HIDDEN_STATE_AMBIGUOUS,
+            "A managed hidden Altium session is already running",
+            diagnostics=diagnostics,
+            suggested_action=(
+                "Wait for that session to finish; if its controller is gone, "
+                "run: python spice_sifter.py recover"
+            ),
+        )
+    if state in ("UNKNOWN", "CORRUPTED"):
+        raise TestError(
+            HIDDEN_STATE_AMBIGUOUS,
+            "Cannot prove the state of the previous hidden Altium session",
+            diagnostics=diagnostics,
+            suggested_action="Run: python spice_sifter.py recover",
+        )
+    if state == "STALE":
+        # Proven gone by PID + creation time; no process is touched.
+        clear_hidden_session(root)
+    return assessment
+
+
 def _finish_managed_session(session, report):
-    """Stop the managed session and attach its diagnostics to the report."""
+    """Stop the managed session and return a stop error, if any."""
+    stop_error = None
     try:
         session.stop()
     except Exception as exc:
         payload = hidden_error_payload(exc) if hasattr(exc, 'code') else {
             'code': 'HIDDEN_STOP_FAILED', 'message': str(exc)
         }
+        stop_error = payload
         report['altium_session_stop_error'] = payload
-        stop = getattr(session, 'stop_result', None) or {}
+        stop = dict(getattr(session, 'stop_result', None) or {})
         stop['error'] = payload
         session.stop_result = stop
     report['altium_session'] = session.diagnostics()
+    return stop_error
 
 
 def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=False,
                   max_runs=100, altium_instance='current', launcher=None,
-                  ready_timeout=120):
+                  ready_timeout=120, temp_dir=None):
     """Run one test file and always return a finalized report.
 
     ``altium_instance='hidden'`` creates, starts and stops one managed hidden
     session for this file.  A batch passes an existing ``launcher`` instead, so
-    exactly one instance serves the whole series.
+    exactly one instance serves the whole series.  ``temp_dir`` scopes the
+    shared state directory (lock, marker, hidden-session record).
     """
     from report_model import finalize_report
     report = dict(status='ERROR', test=None, simulator='Altium MixedSim', checks=[], error=None)
     data = None
+    stop_error = None
     try:
         if altium_instance not in ('current', 'hidden'):
             raise TestError(
@@ -1546,31 +1602,38 @@ def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=Fals
             raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or SPICE_SIFTER_ALTIUM to X2.EXE')
         if launcher is None and altium_instance == 'hidden':
             from hidden_instance import HiddenAltiumSession
-            from runtime_state import acquire_batch_lock
+            from runtime_state import acquire_batch_lock, state_root, state_scope
 
-            session = HiddenAltiumSession(
-                selected, ready_timeout=ready_timeout, verbose=verbose
-            )
-            with acquire_batch_lock(session.state_root):
-                try:
-                    session.start()
-                    session.wait_ready()
-                    if 'component' not in data:
-                        require_altium(selected, session)
-                    execute_test(
-                        selected, data, Path(path).resolve().parent, timeout,
-                        keep_files, verbose, report, max_runs, launcher=session,
+            root = state_root(temp_dir)
+            with state_scope(root=root):
+                with acquire_batch_lock(root):
+                    _ensure_no_previous_hidden_session(root)
+                    session = HiddenAltiumSession(
+                        selected, ready_timeout=ready_timeout, verbose=verbose,
+                        state_root=root,
                     )
-                finally:
-                    _finish_managed_session(session, report)
+                    try:
+                        session.start()
+                        session.wait_ready()
+                        if 'component' not in data:
+                            require_altium(selected, session)
+                        execute_test(
+                            selected, data, Path(path).resolve().parent, timeout,
+                            keep_files, verbose, report, max_runs, launcher=session,
+                        )
+                    finally:
+                        stop_error = _finish_managed_session(session, report)
         else:
-            if 'component' not in data:
-                require_altium(selected, launcher)
-            run_options = {'launcher': launcher} if launcher is not None else {}
-            execute_test(
-                selected, data, Path(path).resolve().parent, timeout,
-                keep_files, verbose, report, max_runs, **run_options,
-            )
+            from runtime_state import state_scope
+            with (state_scope(temp_dir=temp_dir) if temp_dir is not None
+                  else nullcontext()):
+                if 'component' not in data:
+                    require_altium(selected, launcher)
+                run_options = {'launcher': launcher} if launcher is not None else {}
+                execute_test(
+                    selected, data, Path(path).resolve().parent, timeout,
+                    keep_files, verbose, report, max_runs, **run_options,
+                )
     except Exception as e:
         from runtime_state import MarkerError
         from hidden_instance import HiddenAltiumError
@@ -1590,7 +1653,20 @@ def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=Fals
             report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
         else:
             raise
-    return finalize_report(report, data)
+    finalized = finalize_report(report, data)
+    if stop_error is not None:
+        finalized['status'] = 'ERROR'
+        existing = finalized.get('error')
+        if not (isinstance(existing, dict) and existing.get('code')):
+            finalized['error'] = stop_error
+        else:
+            diagnostics = existing.get('diagnostics')
+            if isinstance(diagnostics, dict):
+                diagnostics.setdefault('altium_stop_error', stop_error)
+            else:
+                existing['diagnostics'] = {'altium_stop_error': stop_error}
+        finalized['altium_session_stop_error'] = stop_error
+    return finalized
 
 
 def _service_parser(command):

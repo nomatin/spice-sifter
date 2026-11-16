@@ -466,7 +466,9 @@ def _run_batch_current(tests, altium, timeout, runner, doctor):
 
 def _run_batch_hidden(tests, altium, timeout, runner, doctor, ready_timeout,
                       session_factory, temp_dir):
-    from runtime_state import acquire_batch_lock, doctor_report, state_root
+    from runtime_state import (
+        acquire_batch_lock, doctor_report, state_root, state_scope,
+    )
     from spice_sifter import _select_altium
 
     selected = _select_altium(altium)
@@ -480,8 +482,9 @@ def _run_batch_hidden(tests, altium, timeout, runner, doctor, ready_timeout,
     first_error = None
     session = None
     session_error = None
+    stop_error = None
 
-    with acquire_batch_lock(root):
+    with state_scope(root=root), acquire_batch_lock(root):
         status_report = doctor() if doctor is not None else doctor_report(
             selected, temp_dir=temp_dir, mode="hidden", lock_is_held=True
         )
@@ -500,7 +503,7 @@ def _run_batch_hidden(tests, altium, timeout, runner, doctor, ready_timeout,
                 from hidden_instance import HiddenAltiumSession
 
                 session = HiddenAltiumSession(
-                    selected, ready_timeout=ready_timeout
+                    selected, ready_timeout=ready_timeout, state_root=root
                 )
             session.start()
             session.wait_ready()
@@ -600,9 +603,10 @@ def _run_batch_hidden(tests, altium, timeout, runner, doctor, ready_timeout,
                 try:
                     session.stop()
                 except Exception as exc:
-                    session_error = _hidden_error_payload(
+                    stop_error = _hidden_error_payload(
                         exc, "HIDDEN_STOP_FAILED"
                     )
+                    session_error = stop_error
 
     not_run = sum(1 for run in runs if run["status"] == "NOT_RUN")
     status = "ERROR" if systemic or errors or not_run or session_error \
@@ -621,6 +625,8 @@ def _run_batch_hidden(tests, altium, timeout, runner, doctor, ready_timeout,
     }
     if session is not None:
         result["altium_session"] = session.diagnostics()
+    if stop_error is not None:
+        result["altium_session_stop_error"] = stop_error
     if systemic is not None:
         result["error"] = {
             "code": systemic,
@@ -667,8 +673,11 @@ def run_batch(tests, altium=None, timeout=120, runner=None, doctor=None,
                 ),
             }
             return _batch_blocked(tests, len(tests), error)
-    doctor = doctor or (lambda: doctor_report(altium))
-    return _run_batch_current(tests, altium, timeout, runner, doctor)
+    from runtime_state import state_scope
+
+    doctor = doctor or (lambda: doctor_report(altium, temp_dir=temp_dir))
+    with state_scope(temp_dir=temp_dir):
+        return _run_batch_current(tests, altium, timeout, runner, doctor)
 
 
 def main(argv=None):

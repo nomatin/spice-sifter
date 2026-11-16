@@ -62,9 +62,15 @@ class FakeJob:
     def __init__(self):
         self.handle = 1
         self.error = None
+        self.assign_error = None
+        self.configured = True
         self.assigned = []
         self.terminated = False
         self.closed = False
+
+    @property
+    def usable(self):
+        return bool(self.handle and self.configured and not self.error)
 
     def assign(self, process):
         self.assigned.append(process)
@@ -272,7 +278,7 @@ class LauncherPropagationTests(unittest.TestCase):
             captured.append({
                 "script": script.name,
                 "marker": json.loads(
-                    (Path(tempfile.gettempdir()) / "SpiceSifter"
+                    (Path(td) / "SpiceSifter"
                      / "pending-run.txt").read_text(encoding="utf-8")
                 ),
             })
@@ -291,7 +297,7 @@ class LauncherPropagationTests(unittest.TestCase):
         launcher = FakeLauncher(hooks={"RunTests": hook})
         report = {}
         with tempfile.TemporaryDirectory() as td, \
-                patch("spice_sifter.tempfile.gettempdir", return_value=td), \
+                patch("runtime_state.tempfile.gettempdir", return_value=td), \
                 patch("spice_sifter.subprocess.Popen") as popen:
             outcome, rows = run_altium(
                 "X2.EXE", data, ROOT, 30, False, report, launcher=launcher
@@ -312,7 +318,7 @@ class LauncherPropagationTests(unittest.TestCase):
 
         launcher = FakeLauncher()
         with tempfile.TemporaryDirectory() as td, \
-                patch("spice_sifter.tempfile.gettempdir", return_value=td):
+                patch("runtime_state.tempfile.gettempdir", return_value=td):
             run = Path(td) / "run"
             run.mkdir()
             script = run / "experiment.pas"
@@ -345,7 +351,7 @@ class LauncherPropagationTests(unittest.TestCase):
         launcher.hooks["RunTests"] = hook
         report = {}
         with tempfile.TemporaryDirectory() as td, \
-                patch("spice_sifter.tempfile.gettempdir", return_value=td):
+                patch("runtime_state.tempfile.gettempdir", return_value=td):
             with self.assertRaises(TestError) as ctx:
                 run_altium(
                     "X2.EXE", data, ROOT, 0.05, False, report,
@@ -365,6 +371,7 @@ class SessionIdentityTests(unittest.TestCase):
         session.desktop = FakeDesktop()
         session._started = True
         session._ready = True
+        session._job_managed = True
         return session
 
     def test_wrong_pid_or_creation_time_is_rejected(self):
@@ -380,10 +387,14 @@ class SessionIdentityTests(unittest.TestCase):
             session = self.make_session(td)
             job = session.job
             with patch("hidden_instance.process_still_ours", return_value=False):
-                result = session.stop()
+                with self.assertRaises(HiddenAltiumError) as ctx:
+                    session.stop()
+            kept = rs.hidden_session_path(session.state_root).exists()
+        self.assertEqual(ctx.exception.code, HIDDEN_STATE_AMBIGUOUS)
         self.assertFalse(job.terminated)
-        self.assertEqual(result["reason"], HIDDEN_STATE_AMBIGUOUS)
         self.assertTrue(job.closed)
+        self.assertTrue(kept)
+        self.assertTrue(session.stop_result["state_kept"])
 
     def test_owned_process_is_terminated_through_the_job(self):
         with tempfile.TemporaryDirectory() as td:
@@ -669,7 +680,7 @@ class LockingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             root = rs.state_root(td)
-            with patch("spice_sifter.tempfile.gettempdir", return_value=td), \
+            with patch("runtime_state.tempfile.gettempdir", return_value=td), \
                     rs.acquire_batch_lock(root):
                 with altium_session() as held:
                     self.assertEqual(held, Path(td) / "SpiceSifter")
@@ -722,7 +733,7 @@ class LockingTests(unittest.TestCase):
                     patch("spice_sifter.execute_test") as execute:
                 report = run_test_file(
                     ROOT / "examples" / "divider.json", altium=str(exe),
-                    altium_instance="hidden",
+                    altium_instance="hidden", temp_dir=td,
                 )
         execute.assert_not_called()
         self.assertEqual(report["status"], "ERROR")

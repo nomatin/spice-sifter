@@ -16,7 +16,7 @@ class RuntimeTests(unittest.TestCase):
    with self.assertRaises(TestError) as c:load_test(p)
    self.assertEqual(c.exception.code,'INPUT_INVALID')
  def test_timeout_and_busy(self):
-  with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as td, patch('spice_sifter.tempfile.gettempdir',return_value=td),patch('spice_sifter.subprocess.Popen') as launch:
+  with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as td, patch('runtime_state.tempfile.gettempdir',return_value=td),patch('spice_sifter.subprocess.Popen') as launch:
    def mark_started(*args,**kwargs):
     work=next((Path(td)/'SpiceSifter').glob('*/run_*.pas')).parent
     (work/'started.txt').write_text('STARTED')

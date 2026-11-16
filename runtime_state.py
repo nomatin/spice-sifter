@@ -754,15 +754,45 @@ def _lock_file(root):
 
 
 _LOCK_GUARD = threading.Lock()
-_BATCH_LOCK_STATE = {"depth": 0, "key": None}
+_BATCH_LOCK_STATE = {"depth": 0, "key": None, "thread": None}
+_STATE_LOCAL = threading.local()
 
 
 def _lock_key(root):
-    base = Path(root) if root else state_root()
+    base = Path(root) if root else current_state_root()
     try:
         return str(base.resolve())
     except OSError:
         return str(base)
+
+
+def current_state_root():
+    """The state directory used by the current thread (default or scoped)."""
+    value = getattr(_STATE_LOCAL, "root", None)
+    return Path(value) if value else state_root()
+
+
+@contextmanager
+def state_scope(temp_dir=None, root=None):
+    """Use one state directory for every lock, marker and session record.
+
+    ``root`` wins over ``temp_dir``; without either the default
+    ``%TEMP%\\SpiceSifter`` is used.  The scope is thread-local and nestable, so
+    a batch and the runners it calls share exactly one directory.
+    """
+    target = Path(root) if root is not None else state_root(temp_dir)
+    previous = getattr(_STATE_LOCAL, "root", None)
+    _STATE_LOCAL.root = target
+    try:
+        yield target
+    finally:
+        if previous is None:
+            try:
+                del _STATE_LOCAL.root
+            except AttributeError:  # pragma: no cover - defensive
+                pass
+        else:
+            _STATE_LOCAL.root = previous
 
 
 @contextmanager
@@ -786,11 +816,19 @@ def acquire_lock(root=None, blocking=False):
             handle.close()
 
 
-def batch_lock_held(root=None):
-    """True when this process already owns the batch-level Altium lock."""
+def batch_lock_owner(root=None):
+    """Thread id owning the batch lock for *root*, or ``None``."""
     key = _lock_key(root)
     with _LOCK_GUARD:
-        return _BATCH_LOCK_STATE["depth"] > 0 and _BATCH_LOCK_STATE["key"] == key
+        if _BATCH_LOCK_STATE["depth"] and _BATCH_LOCK_STATE["key"] == key:
+            return _BATCH_LOCK_STATE["thread"]
+        return None
+
+
+def batch_lock_held(root=None):
+    """True when *this* thread already owns the batch-level Altium lock."""
+    owner = batch_lock_owner(root)
+    return owner is not None and owner == threading.get_ident()
 
 
 @contextmanager
@@ -798,20 +836,26 @@ def acquire_batch_lock(root=None, blocking=False):
     """Serialize a whole batch (or a single managed session) in this process.
 
     The same ``altium.lock`` file is used, so independent Spice Sifter runs
-    still exclude each other.  Inside the owning process the lock is reentrant:
-    existing per-script runners call :func:`acquire_lock` and must not deadlock.
+    still exclude each other.  Nested acquisition is allowed only from the
+    owning thread: another thread gets ``MarkerError`` (reported as ``BUSY``)
+    instead of sharing or deadlocking on the lock.
     """
     key = _lock_key(root)
+    me = threading.get_ident()
     with _LOCK_GUARD:
         if _BATCH_LOCK_STATE["depth"]:
             if _BATCH_LOCK_STATE["key"] != key:
                 raise MarkerError(
                     "Nested batch lock uses a different state directory"
                 )
+            if _BATCH_LOCK_STATE["thread"] != me:
+                raise MarkerError(
+                    "Another thread in this process holds the Altium lock"
+                )
             _BATCH_LOCK_STATE["depth"] += 1
             owned = False
         else:
-            _BATCH_LOCK_STATE.update(depth=1, key=key)
+            _BATCH_LOCK_STATE.update(depth=1, key=key, thread=me)
             owned = True
     if owned:
         try:
@@ -819,7 +863,7 @@ def acquire_batch_lock(root=None, blocking=False):
                 yield root
         finally:
             with _LOCK_GUARD:
-                _BATCH_LOCK_STATE.update(depth=0, key=None)
+                _BATCH_LOCK_STATE.update(depth=0, key=None, thread=None)
     else:
         try:
             yield root

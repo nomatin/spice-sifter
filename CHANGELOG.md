@@ -1,5 +1,26 @@
 # История изменений
 
+## 0.7.1 — Hidden Altium control fixes
+
+- `hidden_instance.py`: создание и конфигурация Job Object проверяются; основной
+  процесс и `-R`-launcher'ы запускаются с `CREATE_SUSPENDED`, добавляются в Job
+  Object и только затем возобновляются. Ошибка присоединения завершает запуск с
+  `HIDDEN_LAUNCH_FAILED` и уничтожает только созданный процесс; `READY`
+  невозможен без управляемого Job Object.
+- `runtime_state.py`: batch-блокировка учитывает поток-владелец. Вложенный вход
+  разрешён только из него, другой поток получает `BUSY`/`MarkerError`.
+  Добавлены `current_state_root()` и `state_scope()` для единого каталога
+  состояния.
+- `spice_sifter.py`: одиночный hidden-запуск проверяет предыдущий сеанс
+  (`ACTIVE`/`UNKNOWN`/`CORRUPTED` — отказ, `STALE` — безопасная очистка);
+  ошибка остановки переводит итоговый отчёт в `ERROR` с сохранением `results[]`
+  и диагностики. `run_test_file(..., temp_dir=...)` использует единый
+  `state_root`.
+- `batch_agent.py`: пачка и все вложенные запуски используют один `state_root`;
+  ошибка остановки отражается в `altium_session_stop_error`.
+- Тесты: `tests/test_hidden_control.py` (22 точечных теста) и адаптация
+  затронутых существующих тестов. Полная регрессия не выполнялась.
+
 ## 0.7.0 — Hidden Altium instance
 
 - Добавлен `hidden_instance.py`: управляемый экземпляр Altium Designer на

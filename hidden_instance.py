@@ -118,6 +118,8 @@ GWL_STYLE = -16
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JobObjectExtendedLimitInformation = 9
 
+CREATE_SUSPENDED = 0x00000004
+
 EPOCH_1601 = datetime(1601, 1, 1, tzinfo=timezone.utc)
 
 try:  # pragma: no cover - availability is environment specific
@@ -284,6 +286,10 @@ def _bind_prototypes():
     kernel32.GetExitCodeProcess.restype = wt.BOOL
     kernel32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
     kernel32.WaitForSingleObject.restype = wt.DWORD
+    kernel32.ResumeThread.argtypes = [wt.HANDLE]
+    kernel32.ResumeThread.restype = wt.DWORD
+    kernel32.TerminateProcess.argtypes = [wt.HANDLE, wt.UINT]
+    kernel32.TerminateProcess.restype = wt.BOOL
     kernel32.CreateProcessW.argtypes = [
         wt.LPCWSTR,
         wt.LPWSTR,
@@ -400,6 +406,11 @@ class ProcessHandle:
             return True
         return kernel32.WaitForSingleObject(self.handle, int(timeout * 1000)) == 0
 
+    def terminate(self, exit_code=1):
+        if not self.handle:
+            return False
+        return bool(kernel32.TerminateProcess(self.handle, exit_code))
+
     def close(self):
         if self.handle:
             kernel32.CloseHandle(self.handle)
@@ -433,28 +444,53 @@ def process_still_ours(identity):
 
 
 class ProcessJob:
-    """Job object with ``KILL_ON_JOB_CLOSE`` for this session's process tree."""
+    """Job object with ``KILL_ON_JOB_CLOSE`` for this session's process tree.
+
+    Creation *and* configuration are verified.  An unusable job is never
+    reported as usable: a process must not be considered managed when
+    ``KILL_ON_JOB_CLOSE`` could not be set.
+    """
 
     def __init__(self):
-        self.handle = kernel32.CreateJobObjectW(None, None) if WINDOWS_AVAILABLE else None
+        self.handle = None
         self.error = None
-        if not self.handle:
+        self.configured = False
+        self.assign_error = None
+        if not WINDOWS_AVAILABLE:  # pragma: no cover - non-Windows
+            self.error = "Win32 job APIs are not available"
+            return
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
             self.error = str(Win32Error("CreateJobObjectW"))
             return
         info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         if not kernel32.SetInformationJobObject(
-            self.handle,
+            handle,
             JobObjectExtendedLimitInformation,
             ctypes.byref(info),
             ctypes.sizeof(info),
         ):
-            self.error = str(Win32Error("SetInformationJobObject"))
+            error = str(Win32Error("SetInformationJobObject"))
+            kernel32.CloseHandle(handle)
+            self.error = error
+            return
+        self.handle = handle
+        self.configured = True
+
+    @property
+    def usable(self):
+        return bool(self.handle and self.configured and not self.error)
 
     def assign(self, process):
-        if not self.handle:
+        self.assign_error = None
+        if not self.usable:
+            self.assign_error = self.error or "job object is not usable"
             return False
-        return bool(kernel32.AssignProcessToJobObject(self.handle, process.handle))
+        if not kernel32.AssignProcessToJobObject(self.handle, process.handle):
+            self.assign_error = str(Win32Error("AssignProcessToJobObject"))
+            return False
+        return True
 
     def terminate(self, exit_code=1):
         if not self.handle:
@@ -465,6 +501,7 @@ class ProcessJob:
         if self.handle:
             kernel32.CloseHandle(self.handle)
             self.handle = None
+            self.configured = False
 
 
 @dataclass
@@ -681,13 +718,18 @@ def subprocess_quote(value):
 
 
 def launch_on_desktop(exe, args=(), desktop=None, cwd=None, use_job=True,
-                      raw_args=None, job=None):
+                      raw_args=None, job=None, suspended=None):
     """Start *exe* on *desktop*.
 
     ``desktop=None`` inherits the caller's desktop.  ``raw_args`` is appended
     verbatim because Altium's ``-R`` argument contains nested quotes.  ``job``
     assigns the process to an existing session job instead of creating a new
     one; such a job stays owned by the caller.
+
+    When a job is required the process is created with ``CREATE_SUSPENDED``,
+    assigned to the job and only then resumed.  A failed assignment terminates
+    exactly the process created by this call (it never ran) and raises; an
+    unmanaged Altium can therefore never be reported as ready.
     """
     exe = str(exe)
     if not Path(exe).is_file():
@@ -698,6 +740,9 @@ def launch_on_desktop(exe, args=(), desktop=None, cwd=None, use_job=True,
         command_line = subprocess_quote(exe) + "".join(
             " " + subprocess_quote(a) for a in args
         )
+    requires_job = job is not None or use_job
+    if suspended is None:
+        suspended = requires_job
     startup = STARTUPINFOW()
     startup.cb = ctypes.sizeof(STARTUPINFOW)
     if desktop is not None:
@@ -713,25 +758,59 @@ def launch_on_desktop(exe, args=(), desktop=None, cwd=None, use_job=True,
             None,
             None,
             False,
-            0,
+            CREATE_SUSPENDED if suspended else 0,
             None,
             cwd,
             ctypes.byref(startup),
             ctypes.byref(info),
         ),
     )
-    kernel32.CloseHandle(info.hThread)
-    process = ProcessHandle(info.hProcess, info.dwProcessId)
+    thread_handle = info.hThread
+    raw_handle = info.hProcess
+    process = None
+    created_job = None
     job_owned = job is None
-    job_error = None
-    if job is None and use_job:
-        job = ProcessJob()
-        job_error = job.error
-    assigned = False
-    if job is not None:
-        assigned = job.assign(process)
-        if not assigned:
-            job_error = job_error or str(Win32Error("AssignProcessToJobObject"))
+    try:
+        process = ProcessHandle(raw_handle, info.dwProcessId)
+        if job is None and use_job:
+            created_job = ProcessJob()
+            job = created_job
+            if not job.usable:
+                raise Win32Error(
+                    "CreateJobObjectW", code=0, errors=[job.error or "unusable job"]
+                )
+        assigned = False
+        if job is not None:
+            assigned = job.assign(process)
+            if not assigned:
+                raise Win32Error(
+                    "AssignProcessToJobObject",
+                    code=0,
+                    errors=[job.assign_error or "assignment failed"],
+                )
+        if suspended and kernel32.ResumeThread(thread_handle) == 0xFFFFFFFF:
+            raise Win32Error("ResumeThread")
+    except Exception:
+        # Only the process created above is affected: it is still suspended or
+        # is known by the handle we own, never a pre-existing Altium.
+        try:
+            if process is not None:
+                process.terminate(1)
+                process.wait(5.0)
+            else:
+                kernel32.TerminateProcess(raw_handle, 1)
+                kernel32.WaitForSingleObject(raw_handle, 5000)
+        finally:
+            if thread_handle:
+                kernel32.CloseHandle(thread_handle)
+            if process is not None:
+                process.close()
+            else:
+                kernel32.CloseHandle(raw_handle)
+            if created_job is not None:
+                created_job.close()
+        raise
+    kernel32.CloseHandle(thread_handle)
     return LaunchedProcess(
         process=process,
         desktop=desktop,
@@ -740,7 +819,11 @@ def launch_on_desktop(exe, args=(), desktop=None, cwd=None, use_job=True,
         started_at=started_at,
         job=job,
         job_owned=job_owned,
-        extra={"job_assigned": assigned, "job_error": job_error},
+        extra={
+            "job_assigned": bool(job is not None),
+            "job_error": None,
+            "suspended": suspended,
+        },
     )
 
 
@@ -869,6 +952,7 @@ class HiddenAltiumSession:
         self.desktop = None
         self.job = None
         self._job_created = False
+        self._job_managed = False
         self.process = None
         self.identity = None
         self.started_at = None
@@ -890,8 +974,8 @@ class HiddenAltiumSession:
     @staticmethod
     def _default_state_root():
         try:
-            from runtime_state import state_root
-            return Path(state_root())
+            from runtime_state import current_state_root
+            return Path(current_state_root())
         except Exception:  # pragma: no cover - defensive
             return Path(tempfile.gettempdir()) / "SpiceSifter"
 
@@ -993,25 +1077,53 @@ class HiddenAltiumSession:
                     working_altium=self.working_before)
         self.job = ProcessJob()
         self._job_created = bool(self.job.handle)
-        if not self.job.handle:
+        if not self.job.usable:
+            job_error = self.job.error or "job object is not usable"
             self._cleanup_resources()
             raise HiddenAltiumError(
                 HIDDEN_LAUNCH_FAILED,
-                "Cannot create the job object: " + str(self.job.error),
+                "Cannot create a usable job object: " + job_error,
+                {
+                    "desktop": self.desktop_name,
+                    "altium": self.altium_path,
+                    "job_error": job_error,
+                },
             )
-        if self.job.error:
-            self._event("job_warning", error=self.job.error)
         try:
             launched = launch_on_desktop(
                 self.altium_path, desktop=self.desktop, use_job=False, job=self.job
             )
         except (OSError, Win32Error) as exc:
+            job_error = None
+            if self.job is not None:
+                job_error = self.job.error or self.job.assign_error
             self._cleanup_resources()
             raise HiddenAltiumError(
                 HIDDEN_LAUNCH_FAILED,
                 "Cannot start Altium on the hidden desktop: " + str(exc),
-                {"desktop": self.desktop_name, "altium": self.altium_path},
+                {
+                    "desktop": self.desktop_name,
+                    "altium": self.altium_path,
+                    "job_error": job_error,
+                },
             ) from exc
+        if not launched.extra.get("job_assigned"):
+            # Defensive: launch_on_desktop raises on failure, but an unmanaged
+            # process must never become a READY hidden session.
+            launched.process.terminate(1)
+            launched.process.wait(10.0)
+            launched.close()
+            self._cleanup_resources()
+            raise HiddenAltiumError(
+                HIDDEN_LAUNCH_FAILED,
+                "The managed Altium process is not in the session job object",
+                {
+                    "desktop": self.desktop_name,
+                    "altium": self.altium_path,
+                    "job_error": launched.extra.get("job_error"),
+                },
+            )
+        self._job_managed = True
         self.process = launched.process
         self.identity = launched.identity
         self.started_at = iso_now()
@@ -1032,6 +1144,11 @@ class HiddenAltiumSession:
         if not self._started:
             raise HiddenAltiumError(
                 HIDDEN_STATE_AMBIGUOUS, "The hidden session has not been started"
+            )
+        if not self._job_managed:
+            raise self._fail(
+                HIDDEN_LAUNCH_FAILED,
+                "The managed Altium process is not in the session job object",
             )
         timeout = self.ready_timeout if timeout is None else float(timeout)
         started = time.monotonic()
@@ -1189,6 +1306,11 @@ class HiddenAltiumSession:
             raise HiddenAltiumError(
                 HIDDEN_STATE_AMBIGUOUS, "The hidden session has not been started"
             )
+        if not self._job_managed:
+            raise self._fail(
+                HIDDEN_LAUNCH_FAILED,
+                "The managed Altium process is not in the session job object",
+            )
         if not self._ready:
             raise HiddenAltiumError(
                 HIDDEN_READY_TIMEOUT, "The hidden Altium instance is not ready yet"
@@ -1336,6 +1458,7 @@ class HiddenAltiumSession:
             "elapsed": 0.0,
         }
         started = time.monotonic()
+        had_process = self.process is not None
         self._event("stop_requested", pid=self.pid)
         try:
             for run in self.launchers:
@@ -1350,7 +1473,7 @@ class HiddenAltiumSession:
                 elif not rechecked:
                     result["reason"] = HIDDEN_STATE_AMBIGUOUS
                     self.reason = HIDDEN_STATE_AMBIGUOUS
-                    result["process_gone"] = not self.process.is_alive()
+                    result["process_gone"] = False
                 else:
                     if self.job is not None and self.job.handle:
                         result["job_terminated"] = self.job.terminate(1)
@@ -1366,16 +1489,34 @@ class HiddenAltiumSession:
                         self.reason = result["reason"]
         finally:
             result["elapsed"] = round(time.monotonic() - started, 2)
+            confirmed_gone = result["process_gone"] is True or not had_process
+            if not had_process:
+                result["process_gone"] = True
+            result["state_kept"] = not confirmed_gone
             self._stopped = True
             self.stop_result = result
             self._event("stopped", **result)
-            self._write_state("STOPPED")
+            if confirmed_gone:
+                self._write_state("STOPPED")
+            else:
+                self._write_state(
+                    "STOP_FAILED"
+                    if result["reason"] == HIDDEN_STOP_FAILED
+                    else "AMBIGUOUS"
+                )
             self._cleanup_resources()
-            self._clear_state()
+            if confirmed_gone:
+                self._clear_state()
         if result["reason"] == HIDDEN_STOP_FAILED:
             raise HiddenAltiumError(
                 HIDDEN_STOP_FAILED,
                 "The managed Altium process did not exit after job termination",
+                result,
+            )
+        if result["reason"] == HIDDEN_STATE_AMBIGUOUS:
+            raise HiddenAltiumError(
+                HIDDEN_STATE_AMBIGUOUS,
+                "Cannot prove that the recorded process still belongs to this session",
                 result,
             )
         return result
@@ -1415,8 +1556,8 @@ class HiddenAltiumSession:
             if exc_type is None:
                 raise
         finally:
+            # stop() decides whether hidden-session.json is safe to remove.
             self._cleanup_resources()
-            self._clear_state()
         return False
 
     # -- diagnostics -------------------------------------------------------
@@ -1436,6 +1577,7 @@ class HiddenAltiumSession:
             "ready_timeout": self.ready_timeout,
             "owned": True,
             "job_object": bool(self._job_created),
+            "job_managed": bool(self._job_managed),
             "working_altium_before": self.working_before,
             "commands": list(self.commands),
             "stop": self.stop_result,

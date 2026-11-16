@@ -215,7 +215,7 @@ class SessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = rs.state_root(td)
             marker(root)
-            with patch("spice_sifter.tempfile.gettempdir", return_value=td), patch(
+            with patch("runtime_state.tempfile.gettempdir", return_value=td), patch(
                 "runtime_state.process_info", side_effect=dead
             ):
                 with altium_session():
@@ -225,7 +225,7 @@ class SessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = rs.state_root(td)
             marker(root)
-            with patch("spice_sifter.tempfile.gettempdir", return_value=td), patch(
+            with patch("runtime_state.tempfile.gettempdir", return_value=td), patch(
                 "runtime_state.process_info", side_effect=alive
             ):
                 with self.assertRaises(TestError) as ctx:
@@ -240,7 +240,7 @@ class SessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = rs.state_root(td)
             marker(root)
-            with patch("spice_sifter.tempfile.gettempdir", return_value=td), patch(
+            with patch("runtime_state.tempfile.gettempdir", return_value=td), patch(
                 "runtime_state.process_info", side_effect=unverifiable
             ):
                 with self.assertRaises(TestError) as ctx:
@@ -255,7 +255,7 @@ class SessionTests(unittest.TestCase):
             root = rs.state_root(td)
             root.mkdir(parents=True, exist_ok=True)
             rs.marker_path(root).write_text("broken\nmarker", encoding="utf-8")
-            with patch("spice_sifter.tempfile.gettempdir", return_value=td):
+            with patch("runtime_state.tempfile.gettempdir", return_value=td):
                 with self.assertRaises(TestError) as ctx:
                     with altium_session():
                         pass
