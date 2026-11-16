@@ -9,8 +9,13 @@ external agents should follow:
 2. If it is not READY, do not start any simulation; mark the whole series
    ``NOT_RUN`` with one shared blocking reason.
 3. If a systemic error appears mid-series (BUSY, TIMEOUT, SCRIPT_NOT_EXECUTED,
-   ALTIUM_NOT_RUNNING, ALTIUM_STATE_UNKNOWN), stop the remaining series and
-   keep the reports that were already produced.
+   ALTIUM_NOT_RUNNING, ALTIUM_STATE_UNKNOWN or a ``HIDDEN_*`` failure), stop the
+   remaining series and keep the reports that were already produced.
+
+``altium_instance="current"`` (the default) keeps the original behaviour: the
+interactive Altium is used and never started.  ``altium_instance="hidden"``
+starts exactly one managed instance on a private desktop for the whole series
+and stops it in ``finally``; the next call gets a fresh instance.
 """
 from __future__ import annotations
 
@@ -28,6 +33,15 @@ SYSTEMIC_CODES = {
     "ALTIUM_STATE_UNKNOWN",
     "ALTIUM_PENDING_RUN",
     "ALTIUM_BLOCKED_BY_PENDING_RUN",
+    "HIDDEN_DESKTOP_UNAVAILABLE",
+    "HIDDEN_LAUNCH_FAILED",
+    "HIDDEN_READY_TIMEOUT",
+    "HIDDEN_BLOCKING_DIALOG",
+    "HIDDEN_PROCESS_LOST",
+    "HIDDEN_SCRIPT_NOT_ROUTED",
+    "HIDDEN_SCRIPT_TIMEOUT",
+    "HIDDEN_STATE_AMBIGUOUS",
+    "HIDDEN_STOP_FAILED",
 }
 
 
@@ -283,6 +297,19 @@ def _blocked_code(doctor):
         return "ALTIUM_BLOCKED_BY_PENDING_RUN"
     if state in ("UNKNOWN", "CORRUPTED"):
         return "ALTIUM_STATE_UNKNOWN"
+    if doctor.get("mode") == "hidden":
+        if not (doctor.get("hidden_desktop") or {}).get("supported", True):
+            return "HIDDEN_DESKTOP_UNAVAILABLE"
+        hidden = doctor.get("hidden_instance") or {}
+        if hidden.get("state") == "ACTIVE":
+            return "HIDDEN_STATE_AMBIGUOUS"
+        if hidden.get("state") in ("UNKNOWN", "CORRUPTED"):
+            return "HIDDEN_STATE_AMBIGUOUS"
+        if not (doctor.get("lock") or {}).get("available"):
+            return "ALTIUM_BUSY"
+        if not (doctor.get("temporary_directory") or {}).get("writable"):
+            return "ALTIUM_TEMP_UNAVAILABLE"
+        return "HIDDEN_LAUNCH_FAILED"
     if not (doctor.get("altium") or {}).get("running"):
         return "ALTIUM_NOT_RUNNING"
     if not (doctor.get("lock") or {}).get("available"):
@@ -299,34 +326,44 @@ def _blocked_message(doctor):
     return diagnostics[0] if diagnostics else "Altium is not ready"
 
 
-def run_batch(tests, altium=None, timeout=120, runner=None, doctor=None):
-    """Run a series only after one shared preflight succeeds."""
-    from runtime_state import doctor_report
-    from spice_sifter import run_test_file
+def _hidden_error_payload(exc, default_code="HIDDEN_LAUNCH_FAILED"):
+    code = getattr(exc, "code", None) or default_code
+    payload = {
+        "code": code,
+        "message": getattr(exc, "message", None) or str(exc),
+    }
+    diagnostics = getattr(exc, "diagnostics", None)
+    if diagnostics:
+        payload["diagnostics"] = diagnostics
+    suggested = getattr(exc, "suggested_action", None)
+    if suggested:
+        payload["suggested_action"] = suggested
+    return payload
 
-    runner = runner or run_test_file
-    doctor = doctor or (lambda: doctor_report(altium))
-    tests = list(tests)
-    planned = len(tests)
+
+def _batch_blocked(tests, planned, error):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "ERROR",
+        "error": error,
+        "summary": {
+            "planned_runs": planned,
+            "completed_runs": 0,
+            "not_run": planned,
+        },
+        "runs": [_not_run(index, test, error) for index, test in enumerate(tests)],
+    }
+
+
+def _run_batch_current(tests, altium, timeout, runner, doctor):
     status_report = doctor()
     if not status_report.get("ready"):
-        code = _blocked_code(status_report)
         error = {
-            "code": code,
+            "code": _blocked_code(status_report),
             "message": _blocked_message(status_report),
             "diagnostics": status_report,
         }
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "status": "ERROR",
-            "error": error,
-            "summary": {
-                "planned_runs": planned,
-                "completed_runs": 0,
-                "not_run": planned,
-            },
-            "runs": [_not_run(index, test, error) for index, test in enumerate(tests)],
-        }
+        return _batch_blocked(tests, len(tests), error)
 
     runs = []
     completed = 0
@@ -410,7 +447,7 @@ def run_batch(tests, altium=None, timeout=120, runner=None, doctor=None):
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "summary": {
-            "planned_runs": planned,
+            "planned_runs": len(tests),
             "completed_runs": completed,
             "not_run": not_run,
             "errors": errors,
@@ -425,3 +462,248 @@ def run_batch(tests, altium=None, timeout=120, runner=None, doctor=None):
     elif first_error is not None:
         result["error"] = first_error
     return result
+
+
+def _run_batch_hidden(tests, altium, timeout, runner, doctor, ready_timeout,
+                      session_factory, temp_dir):
+    from runtime_state import acquire_batch_lock, doctor_report, state_root
+    from spice_sifter import _select_altium
+
+    selected = _select_altium(altium)
+    root = state_root(temp_dir)
+    planned = len(tests)
+    runs = []
+    completed = 0
+    errors = 0
+    failed = False
+    systemic = None
+    first_error = None
+    session = None
+    session_error = None
+
+    with acquire_batch_lock(root):
+        status_report = doctor() if doctor is not None else doctor_report(
+            selected, temp_dir=temp_dir, mode="hidden", lock_is_held=True
+        )
+        if not status_report.get("ready"):
+            error = {
+                "code": _blocked_code(status_report),
+                "message": _blocked_message(status_report),
+                "diagnostics": status_report,
+            }
+            return _batch_blocked(tests, planned, error)
+
+        try:
+            if session_factory is not None:
+                session = session_factory()
+            else:
+                from hidden_instance import HiddenAltiumSession
+
+                session = HiddenAltiumSession(
+                    selected, ready_timeout=ready_timeout
+                )
+            session.start()
+            session.wait_ready()
+        except Exception as exc:
+            session_error = _hidden_error_payload(exc)
+            if session is not None:
+                try:
+                    session.stop()
+                except Exception as stop_exc:  # pragma: no cover - defensive
+                    session_error["stop_error"] = _hidden_error_payload(
+                        stop_exc, "HIDDEN_STOP_FAILED"
+                    )
+            result = _batch_blocked(tests, planned, session_error)
+            result["altium_instance"] = "hidden"
+            if session is not None:
+                result["altium_session"] = session.diagnostics()
+            return result
+
+        try:
+            for index, test in enumerate(tests):
+                if systemic is not None:
+                    runs.append(
+                        _not_run(
+                            index,
+                            test,
+                            {
+                                "code": systemic,
+                                "message": "Batch stopped after a systemic error",
+                            },
+                        )
+                    )
+                    continue
+                report = runner(
+                    _path(test),
+                    altium=selected,
+                    timeout=timeout,
+                    altium_instance="hidden",
+                    launcher=session,
+                )
+                error_code = None
+                if isinstance(report, dict):
+                    error_code = (report.get("error") or {}).get("code")
+                if error_code in SYSTEMIC_CODES:
+                    runs.append(
+                        {
+                            "index": index,
+                            "name": _name(test),
+                            "status": "ERROR",
+                            "error": report.get("error"),
+                            "report": report,
+                        }
+                    )
+                    errors += 1
+                    systemic = error_code
+                    continue
+                valid, code, message = validate_report_contract(report)
+                if not valid:
+                    error = {
+                        "code": code,
+                        "message": message,
+                        "diagnostics": {"report": report},
+                    }
+                    if first_error is None:
+                        first_error = error
+                    runs.append(
+                        {
+                            "index": index,
+                            "name": _name(test),
+                            "status": "ERROR",
+                            "error": error,
+                            "report": report,
+                        }
+                    )
+                    errors += 1
+                    continue
+                accepted_status = report.get("status")
+                runs.append(
+                    {
+                        "index": index,
+                        "name": _name(test),
+                        "status": accepted_status,
+                        "report": report,
+                    }
+                )
+                if accepted_status in ("PASS", "FAIL"):
+                    completed += 1
+                    failed = failed or accepted_status == "FAIL"
+                else:
+                    errors += 1
+                    if first_error is None:
+                        first_error = report.get("error") or {
+                            "code": "REPORT_INCOMPLETE",
+                            "message": "Report status is ERROR",
+                        }
+        finally:
+            if session is not None:
+                try:
+                    session.stop()
+                except Exception as exc:
+                    session_error = _hidden_error_payload(
+                        exc, "HIDDEN_STOP_FAILED"
+                    )
+
+    not_run = sum(1 for run in runs if run["status"] == "NOT_RUN")
+    status = "ERROR" if systemic or errors or not_run or session_error \
+        else ("FAIL" if failed else "PASS")
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "altium_instance": "hidden",
+        "summary": {
+            "planned_runs": planned,
+            "completed_runs": completed,
+            "not_run": not_run,
+            "errors": errors,
+        },
+        "runs": runs,
+    }
+    if session is not None:
+        result["altium_session"] = session.diagnostics()
+    if systemic is not None:
+        result["error"] = {
+            "code": systemic,
+            "message": "Batch stopped after a systemic error",
+        }
+    elif session_error is not None:
+        result["error"] = session_error
+    elif first_error is not None:
+        result["error"] = first_error
+    return result
+
+
+def run_batch(tests, altium=None, timeout=120, runner=None, doctor=None,
+              altium_instance="current", ready_timeout=120,
+              session_factory=None, temp_dir=None):
+    """Run a series only after one shared preflight succeeds.
+
+    ``altium_instance="current"`` keeps the original contract and never starts
+    Altium.  ``altium_instance="hidden"`` starts exactly one managed hidden
+    instance for the whole series, reuses it for every test, and stops it in a
+    ``finally`` block.  A new call always gets a fresh instance.
+    """
+    from runtime_state import doctor_report
+    from spice_sifter import run_test_file
+
+    if altium_instance not in ("current", "hidden"):
+        raise ValueError("altium_instance must be 'current' or 'hidden'")
+    runner = runner or run_test_file
+    tests = list(tests)
+    if altium_instance == "hidden":
+        from runtime_state import MarkerError
+
+        try:
+            return _run_batch_hidden(
+                tests, altium, timeout, runner, doctor, ready_timeout,
+                session_factory, temp_dir,
+            )
+        except MarkerError as exc:
+            error = {
+                "code": "BUSY",
+                "message": str(exc),
+                "suggested_action": (
+                    "Wait for the other Spice Sifter process to finish"
+                ),
+            }
+            return _batch_blocked(tests, len(tests), error)
+    doctor = doctor or (lambda: doctor_report(altium))
+    return _run_batch_current(tests, altium, timeout, runner, doctor)
+
+
+def main(argv=None):
+    """Minimal CLI for a real batch run (no server, no persistent queue)."""
+    import argparse
+    import json
+    import os
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="batch_agent.py",
+        description="Run a series of Spice Sifter tests in one Altium instance.",
+    )
+    parser.add_argument("tests", nargs="+", help="test JSON files")
+    parser.add_argument("--altium", default=os.environ.get("SPICE_SIFTER_ALTIUM"))
+    parser.add_argument("--altium-instance", choices=("current", "hidden"),
+                        default="current")
+    parser.add_argument("--timeout", type=float, default=120,
+                        help="per-test timeout in seconds")
+    parser.add_argument("--ready-timeout", type=float, default=120,
+                        help="hidden Altium start-up timeout in seconds")
+    args = parser.parse_args(argv)
+    result = run_batch(
+        args.tests,
+        altium=args.altium,
+        timeout=args.timeout,
+        altium_instance=args.altium_instance,
+        ready_timeout=args.ready_timeout,
+    )
+    print(json.dumps(result, ensure_ascii=True, allow_nan=False,
+                     separators=(",", ":")))
+    return {"PASS": 0, "FAIL": 1, "ERROR": 2}[result["status"]]
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

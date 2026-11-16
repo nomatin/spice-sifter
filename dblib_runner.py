@@ -391,32 +391,43 @@ def read_status(path):
     return fields
 
 
-def _launch(exe, script, run, timeout, verbose):
-    from spice_sifter import altium_session, cached_altium_process
+def _launch(exe, script, run, timeout, verbose, launcher=None):
+    from spice_sifter import (
+        altium_script_command, altium_session, cached_altium_process,
+    )
     from runtime_state import clear_marker, utc_now, write_marker
     status_path = run / "status.txt"
-    command = (
-        '"' + str(exe) + '" -RScriptingSystem:RunScriptFile(FileName="' + str(script)
-        + '"|ProcName="RunExperiment")'
-    )
+    command = altium_script_command(exe, script, "RunExperiment")
     (run / "run.log").write_text(command, encoding="utf-8")
     if verbose:
         print("DbLib run directory: " + str(run), file=sys.stderr)
     start = time.time()
     with altium_session() as lock_root:
         started = utc_now()
-        process = cached_altium_process(exe)
+        if launcher is not None:
+            marker_fields = dict(launcher.marker_fields())
+            altium_pid = marker_fields.pop("altium_pid", None)
+            altium_start_time = marker_fields.pop("altium_start_time", None)
+        else:
+            process = cached_altium_process(exe)
+            marker_fields = None
+            altium_pid = process.get("pid") if process else None
+            altium_start_time = process.get("start_time") if process else None
         write_marker(
             lock_root,
             run_id=run.name,
             run_dir=run,
-            altium_pid=process.get("pid") if process else None,
-            altium_start_time=process.get("start_time") if process else None,
+            altium_pid=altium_pid,
+            altium_start_time=altium_start_time,
             started_at=started,
             timeout_at=started + timedelta(seconds=timeout),
+            extra=marker_fields,
         )
         try:
-            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if launcher is None:
+                subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                launcher.run_script(script, "RunExperiment")
         except Exception:
             clear_marker(lock_root)
             raise
@@ -430,6 +441,22 @@ def _launch(exe, script, run, timeout, verbose):
                         completed = True
                         return fields, start
                 time.sleep(0.1)
+            if launcher is not None:
+                if not launcher.alive():
+                    raise DblibError(
+                        "altium",
+                        "HIDDEN_PROCESS_LOST",
+                        "The managed Altium process disappeared during the test",
+                        {"script": str(script), "run": str(run)},
+                    )
+                code = "HIDDEN_SCRIPT_TIMEOUT" if (run / "started.txt").exists() \
+                    else "HIDDEN_SCRIPT_NOT_ROUTED"
+                raise DblibError(
+                    "altium",
+                    code,
+                    "The hidden instance did not complete the DbLib script before timeout",
+                    {"script": str(script), "run": str(run)},
+                )
             code = "TIMEOUT" if (run / "started.txt").exists() else "SCRIPT_NOT_EXECUTED"
             # Keep the structured marker: the script may still be running.
             raise DblibError(
@@ -1024,7 +1051,7 @@ def build_report(report, data, run, status, start):
     return report
 
 
-def execute_component(exe, data, base, timeout, verbose, report):
+def execute_component(exe, data, base, timeout, verbose, report, launcher=None):
     report.update(
         test=data.get("name"),
         status="ERROR",
@@ -1037,12 +1064,14 @@ def execute_component(exe, data, base, timeout, verbose, report):
     run = None
     try:
         preflight = preflight_component(data)
-        from spice_sifter import TestError, require_running_altium
-        require_running_altium(exe)
+        from spice_sifter import TestError, require_altium
+        require_altium(exe, launcher)
         run, run_base, script = prepare_run(data, preflight)
         report["run_id"] = run.name
         report["artifacts"] = {"run_dir": str(run)}
-        status, start = _launch(exe, script, run, timeout, verbose)
+        status, start = _launch(
+            exe, script, run, timeout, verbose, launcher=launcher
+        )
         build_report(report, data, run, status, start)
     except DblibError as exc:
         stages = {name: "NOT_RUN" for name in STAGES}
@@ -1070,6 +1099,23 @@ def execute_component(exe, data, base, timeout, verbose, report):
             stages=stages,
             error=_error("DBLIB_RUN_FAILED", str(exc), "harness"),
         )
+    except Exception as exc:
+        from hidden_instance import HiddenAltiumError
+        if not isinstance(exc, HiddenAltiumError):
+            raise
+        stages = {name: "NOT_RUN" for name in STAGES}
+        report.update(
+            status="ERROR",
+            stages=stages,
+            error=_error(
+                getattr(exc, "code", "HIDDEN_STATE_AMBIGUOUS"),
+                getattr(exc, "message", str(exc)),
+                "altium",
+                getattr(exc, "diagnostics", None),
+            ),
+        )
+        if run is not None:
+            report["artifacts"] = {"run_dir": str(run)}
 
     try:
         from report_model import finalize_report

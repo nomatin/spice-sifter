@@ -16,11 +16,14 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 
 MARKER_NAME = "pending-run.txt"
 LOCK_NAME = "altium.lock"
+HIDDEN_SESSION_NAME = "hidden-session.json"
+HIDDEN_EVIDENCE_NAME = "hidden-evidence.json"
 MARKER_SCHEMA_VERSION = 1
 START_TIME_TOLERANCE_SECONDS = 3.0
 
@@ -147,6 +150,153 @@ def clear_marker(root=None):
         return True
     except FileNotFoundError:
         return False
+
+
+def hidden_session_path(root=None):
+    return (Path(root) if root else state_root()) / HIDDEN_SESSION_NAME
+
+
+def write_hidden_session(root, data):
+    """Atomically persist hidden-session metadata for doctor and recovery."""
+    payload = dict(data or {})
+    payload.setdefault("updated_at", iso_time(utc_now()))
+    _atomic_write(
+        hidden_session_path(root), json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+    return payload
+
+
+def read_hidden_session(root=None):
+    """Return the last hidden-session record, or ``None`` when absent."""
+    path = hidden_session_path(root)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise MarkerError("Cannot read the hidden-session record: " + str(exc)) from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise MarkerError("The hidden-session record is not valid JSON") from exc
+    if not isinstance(data, dict):
+        raise MarkerError("The hidden-session record is not a JSON object")
+    return data
+
+
+def clear_hidden_session(root=None):
+    try:
+        hidden_session_path(root).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def hidden_evidence_path(root=None):
+    return (Path(root) if root else state_root()) / HIDDEN_EVIDENCE_NAME
+
+
+def write_hidden_evidence(root, data):
+    """Persist facts proven by an actual launch (survives a clean stop)."""
+    payload = dict(data or {})
+    payload.setdefault("updated_at", iso_time(utc_now()))
+    _atomic_write(
+        hidden_evidence_path(root), json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+    return payload
+
+
+def read_hidden_evidence(root=None):
+    try:
+        text = hidden_evidence_path(root).read_text(encoding="utf-8-sig")
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def assess_hidden_session(root=None, process_lookup=None):
+    """Classify the recorded hidden session without terminating anything.
+
+    States: ``NONE``, ``ACTIVE``, ``STALE``, ``UNKNOWN``, ``CORRUPTED``.  A
+    session is ``ACTIVE`` only when the recorded PID *and* creation time still
+    match; a recycled PID is never treated as our Altium.
+    """
+    path = hidden_session_path(root)
+    if not path.exists():
+        return {
+            "state": "NONE",
+            "removable": False,
+            "session": None,
+            "reason": "No hidden Altium session is recorded",
+        }
+    try:
+        session = read_hidden_session(root)
+    except MarkerError as exc:
+        return {
+            "state": "CORRUPTED",
+            "removable": False,
+            "session": None,
+            "reason": str(exc),
+        }
+    pid = session.get("pid")
+    creation_time = session.get("creation_time")
+    base = {
+        "session_id": session.get("session_id"),
+        "pid": pid,
+        "creation_time": creation_time,
+        "desktop": session.get("desktop"),
+        "altium_path": session.get("altium_path"),
+        "started_at": session.get("started_at"),
+        "ready_elapsed": session.get("ready_elapsed"),
+        "state_file": str(path),
+    }
+    if not pid or not creation_time:
+        return {
+            "state": "UNKNOWN",
+            "removable": False,
+            "session": session,
+            "reason": "The hidden-session record has no PID or creation time",
+            "diagnostics": base,
+        }
+    matches, reason = process_matches(pid, creation_time, process_lookup)
+    if matches is True:
+        return {
+            "state": "ACTIVE",
+            "removable": False,
+            "session": session,
+            "reason": "The recorded hidden Altium process is still running",
+            "diagnostics": {**base, "detail": reason},
+        }
+    if matches is False:
+        return {
+            "state": "STALE",
+            "removable": True,
+            "session": session,
+            "reason": "The recorded hidden Altium process has exited or the PID was reused",
+            "diagnostics": {**base, "detail": reason},
+        }
+    return {
+        "state": "UNKNOWN",
+        "removable": False,
+        "session": session,
+        "reason": "Cannot determine whether the recorded hidden Altium process finished",
+        "diagnostics": {**base, "detail": reason},
+    }
+
+
+def _hidden_summary(assessment):
+    if assessment["state"] == "NONE":
+        return None
+    diagnostics = dict(assessment.get("diagnostics") or {})
+    diagnostics["state"] = assessment["state"]
+    diagnostics["removable"] = assessment["removable"]
+    diagnostics["reason"] = assessment.get("reason")
+    return diagnostics
+
 
 
 def read_status_file(path):
@@ -603,6 +753,18 @@ def _lock_file(root):
     return handle
 
 
+_LOCK_GUARD = threading.Lock()
+_BATCH_LOCK_STATE = {"depth": 0, "key": None}
+
+
+def _lock_key(root):
+    base = Path(root) if root else state_root()
+    try:
+        return str(base.resolve())
+    except OSError:
+        return str(base)
+
+
 @contextmanager
 def acquire_lock(root=None, blocking=False):
     """Hold the shared Altium lock for the duration of the context."""
@@ -622,6 +784,48 @@ def acquire_lock(root=None, blocking=False):
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         finally:
             handle.close()
+
+
+def batch_lock_held(root=None):
+    """True when this process already owns the batch-level Altium lock."""
+    key = _lock_key(root)
+    with _LOCK_GUARD:
+        return _BATCH_LOCK_STATE["depth"] > 0 and _BATCH_LOCK_STATE["key"] == key
+
+
+@contextmanager
+def acquire_batch_lock(root=None, blocking=False):
+    """Serialize a whole batch (or a single managed session) in this process.
+
+    The same ``altium.lock`` file is used, so independent Spice Sifter runs
+    still exclude each other.  Inside the owning process the lock is reentrant:
+    existing per-script runners call :func:`acquire_lock` and must not deadlock.
+    """
+    key = _lock_key(root)
+    with _LOCK_GUARD:
+        if _BATCH_LOCK_STATE["depth"]:
+            if _BATCH_LOCK_STATE["key"] != key:
+                raise MarkerError(
+                    "Nested batch lock uses a different state directory"
+                )
+            _BATCH_LOCK_STATE["depth"] += 1
+            owned = False
+        else:
+            _BATCH_LOCK_STATE.update(depth=1, key=key)
+            owned = True
+    if owned:
+        try:
+            with acquire_lock(root, blocking=blocking):
+                yield root
+        finally:
+            with _LOCK_GUARD:
+                _BATCH_LOCK_STATE.update(depth=0, key=None)
+    else:
+        try:
+            yield root
+        finally:
+            with _LOCK_GUARD:
+                _BATCH_LOCK_STATE["depth"] -= 1
 
 
 def lock_available(root=None):
@@ -654,8 +858,18 @@ def _pending_summary(assessment):
     return diagnostics
 
 
-def doctor_report(altium=None, temp_dir=None, process_query=None):
-    """Check readiness without starting any electrical simulation."""
+def doctor_report(altium=None, temp_dir=None, process_query=None, mode="current",
+                  hidden_process_lookup=None, lock_is_held=False):
+    """Check readiness without starting Altium or any electrical simulation.
+
+    ``mode="current"`` keeps the original contract: a responsive interactive
+    Altium is required.  ``mode="hidden"`` checks the hidden-desktop
+    prerequisites and the recorded managed session instead; a running
+    interactive Altium is *not* required and is never selected for control.
+    ``lock_is_held`` is used by a batch that already owns the Altium lock.
+    """
+    if mode not in ("current", "hidden"):
+        raise ValueError("mode must be 'current' or 'hidden'")
     root = state_root(temp_dir)
     query = process_query or altium_processes
     exe = altium or os.environ.get("SPICE_SIFTER_ALTIUM")
@@ -666,6 +880,7 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
     report = {
         "schema_version": "1.0",
         "status": "ERROR",
+        "mode": mode,
         "altium": {
             "path": exe,
             "exists": bool(exe and Path(exe).is_file()),
@@ -679,10 +894,23 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
         "pending_run": None,
         "temporary_directory": {"path": str(root), "writable": False},
         "dblib_resources": {"ready": False, "missing": []},
+        "license_two_instances_allowed": None,
         "ready": False,
         "diagnostics": [],
         "suggested_action": None,
     }
+    if mode == "hidden":
+        report["hidden_desktop"] = {
+            "supported": False, "probe_created": False, "error": None,
+        }
+        report["hidden"] = {
+            "ready": False,
+            "altium_required_running": False,
+            "ready_timeout_seconds": 120.0,
+            "process_identity_required": True,
+            "job_object_owned": True,
+        }
+        report["hidden_instance"] = None
     diagnostics = report["diagnostics"]
 
     if not report["altium"]["exists"]:
@@ -712,9 +940,10 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
             if len(processes) > 1:
                 report["altium"]["state"] = "AMBIGUOUS"
                 report["altium"]["responding"] = None
-                diagnostics.append(
-                    "Multiple matching Altium processes; cannot choose one safely."
-                )
+                if mode == "current":
+                    diagnostics.append(
+                        "Multiple matching Altium processes; cannot choose one safely."
+                    )
             elif len(processes) == 1:
                 responding = processes[0].get("responding")
                 report["altium"]["responding"] = responding
@@ -724,11 +953,12 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
                     report["altium"]["state"] = "NOT_RESPONDING"
                 else:
                     report["altium"]["state"] = "UNKNOWN"
-                    diagnostics.append("Altium responsiveness is unknown.")
+                    if mode == "current":
+                        diagnostics.append("Altium responsiveness is unknown.")
             else:
                 report["altium"]["state"] = "NOT_RUNNING"
 
-    report["lock"]["available"] = lock_available(root)
+    report["lock"]["available"] = True if lock_is_held else lock_available(root)
 
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -757,60 +987,158 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
     assessment = assess_pending(root)
     report["pending_run"] = _pending_summary(assessment)
 
+    session_assessment = None
+    if mode == "hidden":
+        session_assessment = assess_hidden_session(root, hidden_process_lookup)
+        report["hidden_instance"] = _hidden_summary(session_assessment)
+        try:
+            from hidden_instance import probe_hidden_desktop
+
+            report["hidden_desktop"] = probe_hidden_desktop()
+        except Exception as exc:  # pragma: no cover - defensive
+            report["hidden_desktop"] = {
+                "supported": False,
+                "probe_created": False,
+                "error": str(exc),
+            }
+        if not report["hidden_desktop"].get("supported"):
+            diagnostics.append(
+                "A hidden Win32 desktop cannot be created in this session: "
+                + str(report["hidden_desktop"].get("error"))
+            )
+        last_session = (session_assessment or {}).get("session") or {}
+        evidence = read_hidden_evidence(root) or {}
+        if (
+            last_session.get("ready_elapsed") is not None
+            and int(last_session.get("working_altium_count") or 0) > 0
+        ):
+            # Proven by an actual start: one interactive and one hidden
+            # instance coexisted, so the licence allows two slots.
+            report["license_two_instances_allowed"] = True
+        elif evidence.get("license_two_instances_allowed") is True:
+            report["license_two_instances_allowed"] = True
+        report["hidden"]["license_evidence"] = {
+            "license_two_instances_allowed": report["license_two_instances_allowed"],
+            "last_session_id": evidence.get("last_session_id"),
+            "last_ready_elapsed": evidence.get("last_ready_elapsed"),
+            "updated_at": evidence.get("updated_at"),
+        }
+
     version = report["altium"]["version"]
     version_supported = isinstance(version, str) and version.startswith("24.4.")
-    if not report["altium"]["exists"]:
-        status = "ERROR"
-    elif version is None:
-        status = "ERROR"
-        diagnostics.append(
-            "Cannot determine Altium version; compatibility with 24.4.x is unconfirmed."
-        )
-    elif not version_supported:
-        status = "ERROR"
-        diagnostics.append(
-            "Unsupported Altium version: %s; expected 24.4.x." % version
-        )
-    elif report["altium"]["state"] == "UNKNOWN":
-        status = "ERROR"
-    elif report["altium"]["state"] == "AMBIGUOUS":
-        status = "ERROR"
-    elif not report["altium"]["running"]:
-        status = "ERROR"
-        diagnostics.append("Start the selected Altium Designer before running tests.")
-    elif report["altium"]["responding"] is False:
-        status = "BUSY"
-        diagnostics.append("Altium is running but not responding.")
-    elif report["altium"]["responding"] is not True:
-        status = "ERROR"
-        diagnostics.append("Altium responsiveness is unknown; readiness is unconfirmed.")
-    elif not report["temporary_directory"]["writable"]:
-        status = "ERROR"
-    elif not report["lock"]["available"]:
-        status = "BUSY"
-        diagnostics.append("Another Spice Sifter run holds the Altium lock.")
-    elif assessment["state"] == "ACTIVE":
-        status = "BUSY"
-        diagnostics.append("A previous simulation is still running.")
-    elif assessment["state"] in ("UNKNOWN", "CORRUPTED"):
-        status = "RECOVERY_REQUIRED"
-        diagnostics.append("The previous run state cannot be proven; run recover for diagnostics.")
-    elif assessment["state"] in ("COMPLETED", "STALE"):
-        status = "RECOVERY_REQUIRED"
-        diagnostics.append("A finished pending-run marker can be removed with recover.")
-    elif not report["dblib_resources"]["ready"]:
-        status = "ERROR"
+    if mode == "current":
+        if not report["altium"]["exists"]:
+            status = "ERROR"
+        elif version is None:
+            status = "ERROR"
+            diagnostics.append(
+                "Cannot determine Altium version; compatibility with 24.4.x is unconfirmed."
+            )
+        elif not version_supported:
+            status = "ERROR"
+            diagnostics.append(
+                "Unsupported Altium version: %s; expected 24.4.x." % version
+            )
+        elif report["altium"]["state"] == "UNKNOWN":
+            status = "ERROR"
+        elif report["altium"]["state"] == "AMBIGUOUS":
+            status = "ERROR"
+        elif not report["altium"]["running"]:
+            status = "ERROR"
+            diagnostics.append("Start the selected Altium Designer before running tests.")
+        elif report["altium"]["responding"] is False:
+            status = "BUSY"
+            diagnostics.append("Altium is running but not responding.")
+        elif report["altium"]["responding"] is not True:
+            status = "ERROR"
+            diagnostics.append("Altium responsiveness is unknown; readiness is unconfirmed.")
+        elif not report["temporary_directory"]["writable"]:
+            status = "ERROR"
+        elif not report["lock"]["available"]:
+            status = "BUSY"
+            diagnostics.append("Another Spice Sifter run holds the Altium lock.")
+        elif assessment["state"] == "ACTIVE":
+            status = "BUSY"
+            diagnostics.append("A previous simulation is still running.")
+        elif assessment["state"] in ("UNKNOWN", "CORRUPTED"):
+            status = "RECOVERY_REQUIRED"
+            diagnostics.append("The previous run state cannot be proven; run recover for diagnostics.")
+        elif assessment["state"] in ("COMPLETED", "STALE"):
+            status = "RECOVERY_REQUIRED"
+            diagnostics.append("A finished pending-run marker can be removed with recover.")
+        elif not report["dblib_resources"]["ready"]:
+            status = "ERROR"
+        else:
+            status = "READY"
     else:
-        status = "READY"
+        hidden_state = (session_assessment or {}).get("state", "NONE")
+        if not report["altium"]["exists"]:
+            status = "ERROR"
+        elif version is None:
+            status = "ERROR"
+            diagnostics.append(
+                "Cannot determine Altium version; compatibility with 24.4.x is unconfirmed."
+            )
+        elif not version_supported:
+            status = "ERROR"
+            diagnostics.append(
+                "Unsupported Altium version: %s; expected 24.4.x." % version
+            )
+        elif not report["hidden_desktop"].get("supported"):
+            status = "ERROR"
+        elif not report["temporary_directory"]["writable"]:
+            status = "ERROR"
+        elif not report["lock"]["available"]:
+            status = "BUSY"
+            diagnostics.append("Another Spice Sifter run holds the Altium lock.")
+        elif assessment["state"] == "ACTIVE":
+            status = "BUSY"
+            diagnostics.append("A previous simulation is still running.")
+        elif assessment["state"] in ("UNKNOWN", "CORRUPTED"):
+            status = "RECOVERY_REQUIRED"
+            diagnostics.append("The previous run state cannot be proven; run recover for diagnostics.")
+        elif assessment["state"] in ("COMPLETED", "STALE"):
+            status = "RECOVERY_REQUIRED"
+            diagnostics.append("A finished pending-run marker can be removed with recover.")
+        elif hidden_state == "ACTIVE":
+            status = "BUSY"
+            diagnostics.append("A managed hidden Altium session is already running.")
+        elif hidden_state in ("UNKNOWN", "CORRUPTED"):
+            status = "RECOVERY_REQUIRED"
+            diagnostics.append(
+                "The hidden-session state cannot be proven; run recover for diagnostics."
+            )
+        elif hidden_state == "STALE":
+            status = "RECOVERY_REQUIRED"
+            diagnostics.append(
+                "A finished hidden-session record can be removed with recover."
+            )
+        elif not report["dblib_resources"]["ready"]:
+            status = "ERROR"
+        else:
+            status = "READY"
+        report["hidden"]["ready"] = status == "READY"
 
     report["status"] = status
     report["ready"] = status == "READY"
     if status == "READY":
         report["suggested_action"] = None
     elif status in ("BUSY", "RECOVERY_REQUIRED"):
-        report["suggested_action"] = "Run: python spice_sifter.py doctor --json"
-        if status == "RECOVERY_REQUIRED":
-            report["suggested_action"] = "Run: python spice_sifter.py recover"
+        if mode == "hidden":
+            report["suggested_action"] = (
+                "Run: python spice_sifter.py doctor --altium-instance hidden --json"
+            )
+            if status == "RECOVERY_REQUIRED":
+                report["suggested_action"] = "Run: python spice_sifter.py recover"
+        else:
+            report["suggested_action"] = "Run: python spice_sifter.py doctor --json"
+            if status == "RECOVERY_REQUIRED":
+                report["suggested_action"] = "Run: python spice_sifter.py recover"
+    elif mode == "hidden":
+        report["suggested_action"] = (
+            "Fix the reported environment issue; hidden mode does not require a "
+            "running interactive Altium."
+        )
     else:
         report["suggested_action"] = (
             "Start the selected Altium Designer or fix the reported environment issue."
@@ -820,7 +1148,12 @@ def doctor_report(altium=None, temp_dir=None, process_query=None):
 
 def recover_pending(temp_dir=None, process_lookup=None, altium_lookup=None,
                     confirm_legacy_stopped=False):
-    """Safely clear a pending marker that is proven finished."""
+    """Safely clear a pending marker or hidden-session record proven finished.
+
+    Nothing is ever terminated here.  A recorded process is only forgotten when
+    its PID *and* creation time prove that it is gone; otherwise the state is
+    reported as active or unknown and kept for diagnostics.
+    """
     root = state_root(temp_dir)
     try:
         with acquire_lock(root):
@@ -830,26 +1163,17 @@ def recover_pending(temp_dir=None, process_lookup=None, altium_lookup=None,
                 altium_lookup,
                 legacy_confirmed=confirm_legacy_stopped,
             )
+            hidden = assess_hidden_session(root, process_lookup)
             state = assessment["state"]
+            hidden_state = hidden["state"]
             base = {
                 "schema_version": "1.0",
                 "run_id": (assessment.get("marker") or {}).get("run_id"),
                 "state": state,
+                "hidden_session": _hidden_summary(hidden),
                 "diagnostics": assessment.get("diagnostics"),
                 "ready": False,
             }
-            if state == "NONE":
-                base.update(status="NOTHING_TO_RECOVER", ready=True, reason="No pending run")
-                return base
-            if state in ("COMPLETED", "STALE"):
-                removed = clear_marker(root)
-                base.update(
-                    status="RECOVERED",
-                    ready=True,
-                    removed=removed,
-                    reason=assessment["reason"],
-                )
-                return base
             if state == "ACTIVE":
                 base.update(
                     status="REFUSED",
@@ -868,13 +1192,51 @@ def recover_pending(temp_dir=None, process_lookup=None, altium_lookup=None,
                     suggested_action="Close Altium, verify that no simulation is running, then run recover again",
                 )
                 return base
+            if state in ("UNKNOWN", "CORRUPTED"):
+                base.update(
+                    status="UNKNOWN",
+                    reason=assessment["reason"],
+                    suggested_action=(
+                        "Close or restart Altium, verify that no simulation is running, "
+                        "then run: python spice_sifter.py recover"
+                    ),
+                )
+                return base
+            if hidden_state == "ACTIVE":
+                base.update(
+                    status="REFUSED",
+                    reason="A managed hidden Altium session is still running; nothing was terminated",
+                    suggested_action=(
+                        "Wait for the batch to finish, or close it from its own "
+                        "controller, then run recover again"
+                    ),
+                )
+                return base
+            if hidden_state in ("UNKNOWN", "CORRUPTED"):
+                base.update(
+                    status="UNKNOWN",
+                    reason=hidden["reason"],
+                    suggested_action=(
+                        "Cannot prove the hidden-session process state; inspect "
+                        "the diagnostics before removing anything"
+                    ),
+                )
+                return base
+            if state == "NONE" and hidden_state == "NONE":
+                base.update(status="NOTHING_TO_RECOVER", ready=True, reason="No pending run")
+                return base
+            removed_marker = clear_marker(root) if state in ("COMPLETED", "STALE") else False
+            removed_hidden = (
+                clear_hidden_session(root) if hidden_state == "STALE" else False
+            )
             base.update(
-                status="UNKNOWN",
-                reason=assessment["reason"],
-                suggested_action=(
-                    "Close or restart Altium, verify that no simulation is running, "
-                    "then run: python spice_sifter.py recover"
-                ),
+                status="RECOVERED",
+                ready=True,
+                removed=removed_marker,
+                removed_hidden_session=removed_hidden,
+                reason=assessment["reason"]
+                if state in ("COMPLETED", "STALE")
+                else hidden["reason"],
             )
             return base
     except MarkerError as exc:

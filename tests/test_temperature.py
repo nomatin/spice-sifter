@@ -66,7 +66,7 @@ class TemperatureTests(unittest.TestCase):
    t=report['temperature_c'];report['simulation_status']='PASS'
    temperature_plan(variant)
    if variant['output']['graphs']:report['graphs']=[dict(name='v',x=[0,1],real=[.7,.7])]
-   return ('FAIL',[dict(passed=False)]) if variant['checks'] else ('PASS',[])
+   return ('FAIL',[dict(passed=False,value=0.0)]) if variant['checks'] else ('PASS',[])
   r={}
   with patch('spice_sifter.run_altium',side_effect=runner),patch('spice_sifter.require_running_altium'):execute_test('X2',d,ROOT,30,False,False,r)
   self.assertEqual(r['status'],'FAIL');self.assertEqual(r['summary'],dict(total=3,passed=2,failed=1,errors=0))

@@ -30,6 +30,15 @@ SYSTEMIC_ERROR_CODES = {
     'ALTIUM_STATE_UNKNOWN',
     'ALTIUM_PENDING_RUN',
     'ALTIUM_BLOCKED_BY_PENDING_RUN',
+    'HIDDEN_DESKTOP_UNAVAILABLE',
+    'HIDDEN_LAUNCH_FAILED',
+    'HIDDEN_READY_TIMEOUT',
+    'HIDDEN_BLOCKING_DIALOG',
+    'HIDDEN_PROCESS_LOST',
+    'HIDDEN_SCRIPT_NOT_ROUTED',
+    'HIDDEN_SCRIPT_TIMEOUT',
+    'HIDDEN_STATE_AMBIGUOUS',
+    'HIDDEN_STOP_FAILED',
 }
 
 
@@ -569,6 +578,44 @@ def require_running_altium(exe):
     return process
 
 
+def require_altium(exe, launcher=None):
+    """Require either the interactive instance or the managed hidden session.
+
+    In hidden mode there is deliberately no search for a running ``X2.EXE``:
+    the session's own PID and creation time are the only accepted identity.
+    """
+    if launcher is None:
+        return require_running_altium(exe)
+    try:
+        return launcher.ensure_ready()
+    except TestError:
+        raise
+    except Exception as exc:
+        code = getattr(exc, 'code', 'HIDDEN_STATE_AMBIGUOUS')
+        diagnostics = getattr(exc, 'diagnostics', None)
+        suggested = getattr(exc, 'suggested_action', None)
+        raise TestError(code, str(exc), diagnostics=diagnostics,
+                        suggested_action=suggested) from exc
+
+
+def hidden_error_payload(error):
+    """Convert a hidden-session failure into the report error contract."""
+    payload = dict(code=getattr(error, 'code', 'HIDDEN_STATE_AMBIGUOUS'),
+                   message=getattr(error, 'message', str(error)))
+    diagnostics = getattr(error, 'diagnostics', None)
+    if diagnostics:
+        payload['diagnostics'] = diagnostics
+    suggested = getattr(error, 'suggested_action', None)
+    if suggested:
+        payload['suggested_action'] = suggested
+    return payload
+
+
+def altium_script_command(exe, script, proc_name):
+    return ('"'+str(exe)+'" -RScriptingSystem:RunScriptFile(FileName="'
+            +str(script)+'"|ProcName="'+str(proc_name)+'")')
+
+
 def read_status(path):
     try:
         text=path.read_text(encoding='utf-8-sig')
@@ -585,27 +632,19 @@ def read_status(path):
 @contextmanager
 def altium_session():
     """Shared Altium lock and safe pending-run recovery for every runner mode."""
-    from runtime_state import MarkerError, acquire_lock, resolve_pending
+    from runtime_state import MarkerError, acquire_lock, batch_lock_held, resolve_pending
     root = Path(tempfile.gettempdir()) / 'SpiceSifter'
+    if batch_lock_held(root):
+        # A batch already owns the Altium lock for the whole hidden session.
+        # Re-acquiring the same msvcrt byte range would deadlock this process.
+        pending = resolve_pending(root)
+        _check_pending_state(pending)
+        yield root
+        return
     try:
         with acquire_lock(root):
             pending = resolve_pending(root)
-            state = pending['state']
-            diagnostics = pending.get('diagnostics')
-            if state == 'ACTIVE':
-                raise TestError(
-                    'ALTIUM_PENDING_RUN',
-                    'Previous simulation has not finished',
-                    diagnostics=diagnostics,
-                    suggested_action='Run: python spice_sifter.py doctor --json',
-                )
-            if state in ('UNKNOWN', 'CORRUPTED'):
-                raise TestError(
-                    'ALTIUM_STATE_UNKNOWN',
-                    'Cannot determine whether the previous run has finished',
-                    diagnostics=diagnostics,
-                    suggested_action='Run: python spice_sifter.py recover',
-                )
+            _check_pending_state(pending)
             yield root
     except MarkerError as e:
         raise TestError(
@@ -613,6 +652,25 @@ def altium_session():
             str(e),
             suggested_action='Wait for the other Spice Sifter process to finish',
         ) from e
+
+
+def _check_pending_state(pending):
+    state = pending['state']
+    diagnostics = pending.get('diagnostics')
+    if state == 'ACTIVE':
+        raise TestError(
+            'ALTIUM_PENDING_RUN',
+            'Previous simulation has not finished',
+            diagnostics=diagnostics,
+            suggested_action='Run: python spice_sifter.py doctor --json',
+        )
+    if state in ('UNKNOWN', 'CORRUPTED'):
+        raise TestError(
+            'ALTIUM_STATE_UNKNOWN',
+            'Cannot determine whether the previous run has finished',
+            diagnostics=diagnostics,
+            suggested_action='Run: python spice_sifter.py recover',
+        )
 
 
 def with_altium_session(function):
@@ -623,7 +681,7 @@ def with_altium_session(function):
 
 
 @with_altium_session
-def run_altium(exe, data, base, timeout, keep, report, verbose=False):
+def run_altium(exe, data, base, timeout, keep, report, verbose=False, launcher=None):
     from runtime_state import clear_marker, utc_now, write_marker
     root = Path(tempfile.gettempdir()) / 'SpiceSifter'
     work = root / uuid.uuid4().hex
@@ -675,24 +733,36 @@ begin
  S.Free;
 end;
 """ % tuple(map(pas_string,[work/'started.txt',nsx,nsx,expected,work/'status.tmp',work/'status.tmp',status])),encoding='ascii')
-        command = '"' + str(exe) + '" -RScriptingSystem:RunScriptFile(FileName="' + str(script) + '"|ProcName="RunTests")'
+        command = altium_script_command(exe, script, 'RunTests')
         (work/'run.log').write_text(command,encoding='utf-8')
         if verbose:
             print('Run directory: '+str(work),file=sys.stderr)
         started = utc_now()
-        process = cached_altium_process(exe)
+        if launcher is not None:
+            marker_fields = dict(launcher.marker_fields())
+            altium_pid = marker_fields.pop('altium_pid', None)
+            altium_start_time = marker_fields.pop('altium_start_time', None)
+        else:
+            process = cached_altium_process(exe)
+            altium_pid = process.get('pid') if process else None
+            altium_start_time = process.get('start_time') if process else None
+            marker_fields = None
         write_marker(
             root,
             run_id=work.name,
             run_dir=work,
-            altium_pid=process.get('pid') if process else None,
-            altium_start_time=process.get('start_time') if process else None,
+            altium_pid=altium_pid,
+            altium_start_time=altium_start_time,
             started_at=started,
             timeout_at=started + timedelta(seconds=timeout),
+            extra=marker_fields,
         )
         marker_written = True
         try:
-            subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            if launcher is None:
+                subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            else:
+                launcher.run_script(script, 'RunTests')
         except Exception:
             clear_marker(root)
             marker_written = False
@@ -727,7 +797,10 @@ begin
  S.Free;
 end;
 """ % tuple(map(pas_string,[expected,expected,work/'collect.tmp',status,work/'collect.tmp',status])),encoding='ascii')
-                        subprocess.Popen('"'+str(exe)+'" -RScriptingSystem:RunScriptFile(FileName="'+str(collect)+'"|ProcName="RunTests")',stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                        if launcher is None:
+                            subprocess.Popen(altium_script_command(exe, collect, 'RunTests'),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                        else:
+                            launcher.run_script(collect, 'RunTests')
                 collect_fields = read_status(work/'collect.tmp')
                 if collect_fields.get('STATUS') in ('OK','ERROR'):
                     fields = collect_fields
@@ -750,7 +823,23 @@ end;
                     return outcome,rows
             if time.monotonic()>=deadline:
                 timed_out=True
-                code='TIMEOUT' if (work/'started.txt').exists() else 'SCRIPT_NOT_EXECUTED'
+                started_seen=(work/'started.txt').exists()
+                if launcher is not None:
+                    if not launcher.alive():
+                        raise TestError(
+                            'HIDDEN_PROCESS_LOST',
+                            'The managed Altium process disappeared during the test',
+                        )
+                    if started_seen:
+                        raise TestError(
+                            'HIDDEN_SCRIPT_TIMEOUT',
+                            'The hidden instance did not finish the script before timeout',
+                        )
+                    raise TestError(
+                        'HIDDEN_SCRIPT_NOT_ROUTED',
+                        'The script was not started in the hidden instance',
+                    )
+                code='TIMEOUT' if started_seen else 'SCRIPT_NOT_EXECUTED'
                 raise TestError(code,'Altium did not write completion status before timeout')
             time.sleep(0.1)
     finally:
@@ -759,6 +848,11 @@ end;
             report['diagnostics']={'script_started':(work/'started.txt').exists(),'status':read_status(work/'status.txt'),'files':[p.name for p in work.iterdir() if p.is_file()]}
         else:
             shutil.rmtree(work,ignore_errors=True)
+        if launcher is not None:
+            try:
+                report['altium_session']=launcher.diagnostics()
+            except Exception:
+                pass
         if marker_written and not timed_out and completed:
             # The script wrote a final status; the marker is stale.
             clear_marker(root)
@@ -837,7 +931,7 @@ def error_payload(error):
     return payload
 
 
-def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=None):
+def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=None,launcher=None):
     report=dict(status='ERROR',checks=[],error=None)
     if data.get('measurements'):
         report.update(run_id=uuid.uuid4().hex,_measurement_requests=data['measurements'])
@@ -846,12 +940,19 @@ def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=N
     if temperature is not None:
         report.update(temperature_c=temperature,temperature_method='OPTIONS TEMP',simulation_status='ERROR',checks_count=0,checks_status='NOT_RUN')
     try:
-        if temperature is not None or parameters is not None:require_running_altium(exe)
-        report['status'],report['checks']=run_altium(exe,data,base,timeout,keep,report,verbose)
+        if temperature is not None or parameters is not None:require_altium(exe,launcher)
+        run_options = {'launcher': launcher} if launcher is not None else {}
+        report['status'],report['checks']=run_altium(exe,data,base,timeout,keep,report,verbose,**run_options)
         if report['status']=='ERROR':report['error']=next(r['error'] for r in report['checks'] if 'error' in r)
     except TestError as e:report['error']=error_payload(e)
-    except (OSError,ValueError,subprocess.TimeoutExpired) as e:
-        report['error']=dict(code='SIM_NOT_RUN',message=str(e))
+    except Exception as e:
+        from hidden_instance import HiddenAltiumError
+        if isinstance(e,HiddenAltiumError):
+            report['error']=hidden_error_payload(e)
+        elif isinstance(e,(OSError,ValueError,subprocess.TimeoutExpired)):
+            report['error']=dict(code='SIM_NOT_RUN',message=str(e))
+        else:
+            raise
     if temperature is not None or parameters is not None:
         report['checks_count']=len(report['checks'])
         report['checks_status']=('NOT_CONFIGURED' if not data['checks'] else ('NOT_RUN' if not report['checks'] else ('ERROR' if any('error' in c for c in report['checks']) else ('PASS' if all(c['passed'] for c in report['checks']) else 'FAIL'))))
@@ -863,18 +964,19 @@ def execute_one(exe,data,base,timeout,keep,verbose,temperature=None,parameters=N
     return report
 
 
-def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
+def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100,launcher=None):
     from report_model import finalize_report
+    run_options = {'launcher': launcher} if launcher is not None else {}
     if 'component' in data:
         from dblib_runner import execute_component
-        execute_component(exe,data,base,timeout,verbose,report)
+        execute_component(exe,data,base,timeout,verbose,report,**run_options)
         return finalize_report(report,data)
     if 'sweep' in data:
-        execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs)
+        execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs,**run_options)
         return finalize_report(report,data)
     plan=temperature_plan(data)
     if 'temperatures_c' not in data:
-        report.update(execute_one(exe,data,base,timeout,keep,verbose,plan[0] if plan else None))
+        report.update(execute_one(exe,data,base,timeout,keep,verbose,plan[0] if plan else None,**run_options))
         finish_measurements(data,report)
         return finalize_report(report,data)
     runs=[]
@@ -888,7 +990,7 @@ def execute_test(exe,data,base,timeout,keep,verbose,report,max_runs=100):
         if 'measurements' in data:variant['measurements']=[m for m in data['measurements'] if 'temperature_c' not in m or m['temperature_c']==t]
         if 'output' in data:
             variant['output']=dict(data['output'],graphs=[{k:v for k,v in g.items() if k!='temperatures_c'} for g in data['output'].get('graphs',[]) if 'temperatures_c' not in g or t in g['temperatures_c']])
-        run=execute_one(exe,variant,base,timeout,keep,verbose,t)
+        run=execute_one(exe,variant,base,timeout,keep,verbose,t,launcher=launcher) if launcher is not None else execute_one(exe,variant,base,timeout,keep,verbose,t)
         runs.append(run)
         if is_systemic_error(run.get('error')):
             stopped=True
@@ -1022,7 +1124,7 @@ def render_parameters(spice,parameters):
     return rendered
 
 
-def execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs):
+def execute_sweep(exe,data,base,timeout,keep,verbose,report,max_runs,launcher=None):
     axes,total=sweep_plan(data,max_runs,base)
     temperatures=temperature_plan(data) or [None]
     runs=[];stopped=False
@@ -1403,12 +1505,38 @@ def _select_altium(exe):
     return exe
 
 
-def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=False, max_runs=100):
-    """Run one test file and always return a finalized report."""
+def _finish_managed_session(session, report):
+    """Stop the managed session and attach its diagnostics to the report."""
+    try:
+        session.stop()
+    except Exception as exc:
+        payload = hidden_error_payload(exc) if hasattr(exc, 'code') else {
+            'code': 'HIDDEN_STOP_FAILED', 'message': str(exc)
+        }
+        report['altium_session_stop_error'] = payload
+        stop = getattr(session, 'stop_result', None) or {}
+        stop['error'] = payload
+        session.stop_result = stop
+    report['altium_session'] = session.diagnostics()
+
+
+def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=False,
+                  max_runs=100, altium_instance='current', launcher=None,
+                  ready_timeout=120):
+    """Run one test file and always return a finalized report.
+
+    ``altium_instance='hidden'`` creates, starts and stops one managed hidden
+    session for this file.  A batch passes an existing ``launcher`` instead, so
+    exactly one instance serves the whole series.
+    """
     from report_model import finalize_report
     report = dict(status='ERROR', test=None, simulator='Altium MixedSim', checks=[], error=None)
     data = None
     try:
+        if altium_instance not in ('current', 'hidden'):
+            raise TestError(
+                'INPUT_INVALID', "altium_instance must be 'current' or 'hidden'"
+            )
         data = load_test(path,max_runs)
         report['test'] = data['name']
         if not math.isfinite(timeout) or timeout <= 0:
@@ -1416,19 +1544,60 @@ def run_test_file(path, altium=None, timeout=120, keep_files=False, verbose=Fals
         selected = _select_altium(altium)
         if not selected or not Path(selected).is_file():
             raise TestError('ALTIUM_NOT_FOUND', 'Set --altium or SPICE_SIFTER_ALTIUM to X2.EXE')
-        if 'component' not in data:
-            require_running_altium(selected)
-        execute_test(selected,data,Path(path).resolve().parent,timeout,keep_files,verbose,report,max_runs)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-        report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
-    except TestError as e:
-        report['error'] = error_payload(e)
+        if launcher is None and altium_instance == 'hidden':
+            from hidden_instance import HiddenAltiumSession
+            from runtime_state import acquire_batch_lock
+
+            session = HiddenAltiumSession(
+                selected, ready_timeout=ready_timeout, verbose=verbose
+            )
+            with acquire_batch_lock(session.state_root):
+                try:
+                    session.start()
+                    session.wait_ready()
+                    if 'component' not in data:
+                        require_altium(selected, session)
+                    execute_test(
+                        selected, data, Path(path).resolve().parent, timeout,
+                        keep_files, verbose, report, max_runs, launcher=session,
+                    )
+                finally:
+                    _finish_managed_session(session, report)
+        else:
+            if 'component' not in data:
+                require_altium(selected, launcher)
+            run_options = {'launcher': launcher} if launcher is not None else {}
+            execute_test(
+                selected, data, Path(path).resolve().parent, timeout,
+                keep_files, verbose, report, max_runs, **run_options,
+            )
+    except Exception as e:
+        from runtime_state import MarkerError
+        from hidden_instance import HiddenAltiumError
+        if isinstance(e, MarkerError):
+            report['error'] = {
+                'code': 'BUSY',
+                'message': str(e),
+                'suggested_action': (
+                    'Wait for the other Spice Sifter process to finish'
+                ),
+            }
+        elif isinstance(e, HiddenAltiumError):
+            report['error'] = hidden_error_payload(e)
+        elif isinstance(e, TestError):
+            report['error'] = error_payload(e)
+        elif isinstance(e, (OSError, ValueError, subprocess.TimeoutExpired)):
+            report['error'] = dict(code='SIM_NOT_RUN', message=str(e))
+        else:
+            raise
     return finalize_report(report, data)
 
 
 def _service_parser(command):
     parser = JSONArgumentParser(prog='spice_sifter.py ' + command)
     parser.add_argument('--altium', default=os.environ.get('SPICE_SIFTER_ALTIUM'))
+    parser.add_argument('--altium-instance', choices=('current', 'hidden'),
+                        default='current')
     parser.add_argument('--json', action='store_true')
     if command == 'recover':
         parser.add_argument('--confirm-legacy-stopped', action='store_true')
@@ -1439,11 +1608,22 @@ def _print_doctor_human(report):
     altium = report.get('altium', {})
     print('Spice Sifter doctor')
     print('Status: ' + str(report.get('status')))
+    print('Mode: ' + str(report.get('mode', 'current')))
     print('Altium: ' + str(altium.get('path')))
     print('  exists: ' + str(altium.get('exists')))
     print('  version: ' + str(altium.get('version')))
     print('  running: ' + str(altium.get('running')))
     print('  responding: ' + str(altium.get('responding')))
+    hidden_desktop = report.get('hidden_desktop')
+    if hidden_desktop:
+        print('Hidden desktop supported: ' + str(hidden_desktop.get('supported')))
+        if hidden_desktop.get('error'):
+            print('  error: ' + str(hidden_desktop.get('error')))
+    if 'hidden_instance' in report:
+        print('Hidden instance: ' + str(report.get('hidden_instance')))
+    if report.get('license_two_instances_allowed') is not None:
+        print('Two Altium instances allowed: '
+              + str(report.get('license_two_instances_allowed')))
     print('Lock available: ' + str(report.get('lock', {}).get('available')))
     pending = report.get('pending_run')
     if pending:
@@ -1467,7 +1647,7 @@ def _service_main(command, argv):
         return 2
     if command == 'doctor':
         from runtime_state import doctor_report
-        report = doctor_report(args.altium)
+        report = doctor_report(args.altium, mode=args.altium_instance)
         if args.json:
             print(json.dumps(report, ensure_ascii=True, allow_nan=False, separators=(',', ':')))
         else:
@@ -1488,6 +1668,9 @@ def main(argv=None):
     p = JSONArgumentParser()
     p.add_argument('test')
     p.add_argument('--altium', default=os.environ.get('SPICE_SIFTER_ALTIUM'))
+    p.add_argument('--altium-instance', choices=('current', 'hidden'),
+                   default='current')
+    p.add_argument('--ready-timeout', type=float, default=120)
     p.add_argument('--timeout', type=float, default=120)
     p.add_argument('--keep-files', action='store_true')
     p.add_argument('--verbose', action='store_true')
@@ -1495,6 +1678,8 @@ def main(argv=None):
     report = dict(status='ERROR', test=None, simulator='Altium MixedSim', checks=[], error=None)
     try:
         args = p.parse_args(arguments)
+        if not math.isfinite(args.ready_timeout) or args.ready_timeout <= 0:
+            raise TestError('INPUT_INVALID', 'ready-timeout must be positive and finite')
         report = run_test_file(
             args.test,
             altium=args.altium,
@@ -1502,6 +1687,8 @@ def main(argv=None):
             keep_files=args.keep_files,
             verbose=args.verbose,
             max_runs=args.max_runs,
+            altium_instance=args.altium_instance,
+            ready_timeout=args.ready_timeout,
         )
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         from report_model import finalize_report
