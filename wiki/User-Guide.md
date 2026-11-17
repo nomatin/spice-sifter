@@ -1,60 +1,54 @@
-# Руководство пользователя
+# User Guide
 
-## Ограничения
+## Requirements and Limitations
 
-- Поддерживаются `.TRAN`, `.DC`, `.OP` и `.AC` (DEC/OCT/LIN). Импеданс рассчитывается для комплексных данных AC; `.OP` требует явной `.PLOT OP` для сохранения выбранных сигналов. Неизвестный формат SDF и амплитудные AC-данные без комплексных составляющих отклоняются.
-- В режиме `current` (по умолчанию) Altium должен быть открыт, лицензирован и свободен от блокирующих диалогов; иначе возможен `ALTIUM_NOT_RUNNING`. Режим `hidden` сам запускает собственный экземпляр Altium и не требует заранее открытого приложения, но ему необходим доступный лицензионный слот. Наличие процесса само по себе не гарантирует его отзывчивость.
-- Независимые параллельные запуски Spice Sifter ограничены межпроцессной блокировкой. В режиме `current` не запускайте ручные симуляции во время проверки; режим `hidden` использует отдельный экземпляр Altium.
-- Кириллические пути моделей требуют доступных коротких имён Windows; иначе используйте путь ASCII. Вложенные относительные `.include` и кириллические директивы внутри `spice` отдельно не проверены.
-- Полный текст сообщений панели MixedSim не экспортируется; при ошибках сохраняются доступные диагностические файлы.
-- При тайм-ауте в режиме `current` Spice Sifter не завершает пользовательский Altium. Незавершённый запуск защищается структурированным маркером `pending-run.txt`; восстановление допускается только при доказанном завершении процесса. В режиме `hidden` жизненный цикл собственного экземпляра контролируется отдельно (см. [описание hidden-режима](HIDDEN_ALTIUM.md)).
+- Supported analyses are `.TRAN`, `.DC`, `.OP`, and `.AC` (DEC/OCT/LIN). Complex AC data are required for impedance; `.OP` requires explicit `.PLOT OP` to save selected signals. Unknown SDF formats and AC magnitude-only data without complex components are rejected.
+- In default `current` mode, Altium must already be running, licensed, responsive, and free of blocking dialogs; otherwise `ALTIUM_NOT_RUNNING` or another readiness error may occur. `hidden` launches a separate instance and does not require an already-open Altium, but needs a license slot.
+- Independent concurrent Spice Sifter runs are restricted by an interprocess lock. Avoid manual simulations during `current` tests. `hidden` uses a dedicated instance.
+- Cyrillic model paths require working Windows short filenames; otherwise use ASCII paths. Recursive relative `.include` references and Cyrillic directives inside `spice` have not been separately verified.
+- Full MixedSim panel text is not exported; available diagnostic files are preserved on errors.
+- On a `current` timeout, Spice Sifter does not terminate the user's Altium. A structured `pending-run.txt` marker blocks unsafe follow-up runs until safe recovery can be proved. The hidden instance lifecycle is managed separately; see [Hidden Altium](HIDDEN_ALTIUM.md).
 
-## Инструкция
+## Quick Start
 
-1. Для режима `current` откройте Altium Designer и закройте блокирующие диалоги. Для `hidden` предварительно открывать Altium не нужно.
-2. В терминале перейдите в каталог проекта.
-3. Выполните тест:
+1. For `current`, open Altium Designer and close any blocking dialogs. For `hidden`, Altium need not be open.
+2. Open a terminal in the project directory.
+3. Run a test:
 
 ```powershell
 python spice_sifter.py examples/divider.json
 python spice_sifter.py examples/diode.json --keep-files
 ```
 
-Путь к Altium определяется из `--altium`, затем `SPICE_SIFTER_ALTIUM`. Без них проверяется стандартный `Program Files/Altium/AD24/X2.EXE` с версией 24.4.
+The Altium executable path is chosen from `--altium`, then `SPICE_SIFTER_ALTIUM`, or the standard `Program Files/Altium/AD24/X2.EXE` path for version 24.4.
 
 ```powershell
 python spice_sifter.py examples/divider.json --altium "C:\Program Files\Altium\AD24\X2.EXE" --timeout 120 --verbose
 ```
 
-Параметры:
-
-| Параметр | Назначение |
+| Option | Description |
 |---|---|
-| `--altium PATH` | Путь к выбранному X2.EXE |
-| `--altium-instance {current,hidden}` | `current` (по умолчанию) работает с открытым Altium; `hidden` запускает собственный экземпляр на скрытом Desktop |
-| `--ready-timeout SECONDS` | Таймаут запуска скрытого Altium, по умолчанию 120 секунд |
-| `--timeout SECONDS` | Ограничение ожидания скрипта, по умолчанию 120 секунд |
-| `--keep-files` | Сохранить временные файлы и добавить их путь в отчёт |
-| `--verbose` | Вывести диагностику в stderr |
-| `--max-runs N` | Лимит запусков Parameter Sweep, по умолчанию 100 |
+| `--altium PATH` | Path to selected X2.EXE |
+| `--altium-instance {current,hidden}` | Use an open Altium (`current`, default) or start a dedicated hidden instance |
+| `--ready-timeout SECONDS` | Hidden startup readiness timeout; default 120 s |
+| `--timeout SECONDS` | Timeout for each test script; default 120 s |
+| `--keep-files` | Keep temporary files and include artifact paths in report |
+| `--verbose` | Diagnostic output on stderr |
+| `--max-runs N` | Maximum sweep runs; default 100 |
 
-### Результаты, coverage и итоговый статус
+### Results and Coverage
 
-Каждый отчёт содержит `schema_version: "1.0"`, `results[]` и `coverage`. `results[]` — основной источник измерений; `checks[]`, `measurements[]` и `runs[]` сохранены для обратной совместимости.
+Every report contains `schema_version: "1.0"`, `results[]`, and `coverage`; `results[]` is the normalized source of measurements. Historical `checks[]`, `measurements[]`, and `runs[]` remain for compatibility.
 
-- `PASS` — допуски заданы и пройдены.
-- `FAIL` — значение вне допусков.
-- `MEASURED` — значение получено, допуски не заданы.
-- `ERROR` — достоверный результат получить нельзя.
-- `NOT_RUN` — проверка не выполнялась.
+- `PASS`: limits met; `FAIL`: limits violated.
+- `MEASURED`: value obtained without limits, not an assertion of datasheet compliance.
+- `ERROR`: reliable result unavailable; `NOT_RUN`: operation never executed.
 
-Для `PASS`, `FAIL` и `MEASURED` значение `value` обязано быть конечным числом. `null`, `NaN`, `Infinity`, строка или boolean переводят результат в `ERROR` (`RESULT_VALUE_INVALID`/`RESULT_VALUE_MISSING`); итоговый статус пересчитывается.
+PASS/FAIL/MEASURED values must be finite numbers. Missing/null/NaN/Infinity/string/boolean values become ERROR (`RESULT_VALUE_INVALID` or `RESULT_VALUE_MISSING`) and the overall status is recomputed.
 
-`coverage.expected` — число запланированных экземпляров проверок и измерений, а не число запусков. Инварианты: `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`. Потеря результата даёт `ERROR / REPORT_INCOMPLETE`; подстановка `PASS` или `0` запрещена. Если проверок по допускам нет, возвращается `validation_status: "NO_ASSERTIONS"`.
+`coverage.expected` counts planned check/measurement instances, not simulation runs. Invariants: `expected = completed + missing`, `completed = passed + failed + measured + errors`, and `missing = not_run`. Missing results mean `ERROR / REPORT_INCOMPLETE`; never fill them with PASS or zero. Without assertions, `validation_status: "NO_ASSERTIONS"` applies. See [Report Contract](REPORT_CONTRACT.md).
 
-Подробный контракт: [REPORT_CONTRACT.md](REPORT_CONTRACT.md).
-
-### doctor и recover
+### Doctor and Recovery
 
 ```powershell
 python spice_sifter.py doctor
@@ -63,60 +57,52 @@ python spice_sifter.py recover
 python spice_sifter.py recover --confirm-legacy-stopped
 ```
 
-`doctor` проверяет X2.EXE, версию, запущенный процесс, отзывчивость, блокировку, `pending-run`, временную директорию и ресурсы DbLib, не запуская моделирование. Статусы: `READY`, `BUSY`, `RECOVERY_REQUIRED`, `ERROR`. `READY` требует версию `24.4.x` и подтверждённую отзывчивость (`responding = true`); неизвестная версия, `responding = null` и несколько неоднозначных экземпляров не дают `READY`.
+`doctor` performs a non-simulating readiness check of X2.EXE, version, process, responsiveness, lock, pending-run, temporary folder, and DbLib resources. Possible statuses: READY, BUSY, RECOVERY_REQUIRED, ERROR. In current mode, READY requires version 24.4.x and `responding = true`. Unknown versions, unknown responsiveness, or ambiguous instances do not count as READY.
 
-`recover` безопасно удаляет `pending-run` только при доказанном завершении предыдущего запуска или завершении процесса Altium. Для старого маркера с одним путём проверяется наличие всех процессов `X2.EXE`; очистка разрешается только при достоверном их отсутствии. `--confirm-legacy-stopped` не обходит эту проверку. Активная симуляция не прерывается; при неопределённом состоянии выдаётся диагностика и инструкция. Возраст маркера не является основанием для удаления. Подробнее: [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md).
+`recover` removes a pending marker only after verifying completion or process exit. For legacy path-only markers, all X2.EXE processes must be verifiably absent. `--confirm-legacy-stopped` does not bypass this condition. Active simulations are never interrupted; marker age alone never permits deletion. See [Agent Integration](AGENT_INTEGRATION.md).
 
-### Скрытый экземпляр Altium
+### Hidden Altium Instance
 
 ```powershell
-# Один тест: Spice Sifter запускает и завершает собственный Altium
+# One test: start and stop a dedicated hidden Altium
 python spice_sifter.py examples/dblib_resistor_r0009.json --altium-instance hidden
 
-# Проверка готовности hidden-режима (Altium запускать не нужно)
+# Hidden-mode readiness check (Altium need not be running)
 python spice_sifter.py doctor --altium-instance hidden --json
 
-# Пачка: один экземпляр на серию, свежий при следующем вызове
+# Batch: one dedicated instance, fresh on the next invocation
 python batch_agent.py temp/inputs/a.json temp/inputs/b.json `
   --altium-instance hidden --timeout 180 --ready-timeout 120
 ```
 
-В hidden-режиме рабочий Altium можно оставить открытым: Spice Sifter не
-закрывает его, не перезапускает и не отправляет ему скрипты. Собственный
-экземпляр создаётся на Desktop `SpiceSifterHidden-<id>` и завершается через
-собственный Job Object. Каждая команда `-R`, включая дополнительный
-`collect.pas`, исполняется только скрытым экземпляром. Требуются Altium 24.4.x,
-интерактивный сеанс и свободный лицензионный слот. При аварии `doctor` вернёт
-`RECOVERY_REQUIRED`, а `recover` удалит запись только после доказанного
-завершения процесса. Подробности и коды ошибок — в
-[описании hidden-режима](HIDDEN_ALTIUM.md).
+Hidden mode can coexist with the user's working Altium without closing, restarting, or sending scripts to it. A dedicated instance runs on `SpiceSifterHidden-<id>` and is managed via a Job Object. All `-R` invocations, including `collect.pas`, target that instance. Altium 24.4.x, an interactive session, and an available license slot are required. An unresolved session is diagnosed by doctor; recover only removes proven stale records. See [Hidden Altium](HIDDEN_ALTIUM.md) for details and error codes.
 
-### Режим DbLib Component
+### DbLib Component Mode
 
-Вместо `spice` входной JSON содержит `component`. Компонент берётся из установленной DbLib, программно размещается на подготовленном SchDoc и проверяется через MixedSim.
+A top-level `component` object instead of standalone `spice` selects a component from a database library, places it in a prepared SchDoc, and tests it with MixedSim.
 
 ```json
 {
   "name": "dblib_resistor_r0009",
-  "component": {"library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib", "page": "Резисторы", "id": "R0009"},
+  "component": {"library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib", "page": "Resistors", "id": "R0009"},
   "fixture": "resistor_dc",
   "checks": [{"analysis": "op", "signal": "v(dut_p)", "measurement": "first", "min": -1.06, "max": -0.94}]
 }
 ```
 
-- `library` — только полный абсолютный путь к существующему файлу `.DbLib`. Относительные пути, одно имя файла и автоматический поиск по каталогам не поддерживаются: возвращается `LIBRARY_PATH_INVALID`. Путь из примера демонстрационный, замените его на локальный.
-- `page` — имя страницы Excel. Символ `$` для таблицы DbLib добавляется автоматически, повторно не дублируется.
-- `id` — исходное значение ключевой колонки `ID`, а не Designator или MPN.
-- `fixture` обязателен для старого двухвыводного режима: `resistor_dc` (1 А, `.OP`), `diode_forward` (−10 мА) или `diode_reverse` (+10 мА). Первые два используются для положительных проверок; обратное включение диода с прямыми допусками даёт ожидаемый `FAIL`.
+- `library` must be the full absolute path to an existing `.DbLib`; relative/name-only paths and automatic library discovery are not supported (`LIBRARY_PATH_INVALID`). Replace the sample path with your local library.
+- `page` is the Excel worksheet; its DbLib `$` suffix is added automatically.
+- `id` is the original ID column value, not a Designator or MPN.
+- For legacy two-pin tests, `fixture` is required: `resistor_dc` (1 A, OP), `diode_forward` (−10 mA), or `diode_reverse` (+10 mA). Reverse testing with forward limits intentionally produces FAIL.
 
-Для многовыводных компонентов вместо `fixture` задаются `spice` и `pins`:
+Multi-pin components specify `spice` and `pins` instead of `fixture`:
 
 ```json
 {
   "name": "dblib_mosfet_vt0001",
   "component": {
     "library": "C:\\AltiumLibraries\\MY_LIB\\MY_LIB.DbLib",
-    "table": "Транзисторы",
+    "table": "Transistors",
     "id": "VT0001",
     "designator": "Q1",
     "pins": {"1": "GATE", "2": "GND", "3": "DRAIN"}
@@ -126,22 +112,22 @@ python batch_agent.py temp/inputs/a.json temp/inputs/b.json `
 }
 ```
 
-- `table` — то же, что `page`; `$` добавляется автоматически.
-- `pins` — произвольное число пар «designator вывода УГО → сеть». `null` означает явно неподключённый вывод; отсутствие вывода в `pins` — ошибка `COMPONENT_PIN_UNASSIGNED`.
-- `spice` — минимальная оснастка: V/I/R/C/L и ровно один `{{DUT}}`, плюс одна директива `.OP`, `.AC` или `.TRAN`. `.OPTIONS` — только `METHOD`, `SPICEREFNODE`, `DVCC`, `DVDD`. Неизвестные элементы/директивы дают `FIXTURE_*` до симуляции.
-- Количество выводов берётся из загруженного компонента; порядок перечисления не считается нумерацией. `component.designator` задаёт designator DUT в NSX.
+- `table` is an alias of `page`; `$` is added automatically.
+- `pins` maps schematic pin designators to nets. `null` explicitly means unconnected; omitting a pin yields `COMPONENT_PIN_UNASSIGNED`. All actual pins must be accounted for.
+- `spice` permits fixture V/I/R/C/L elements, exactly one `{{DUT}}`, and one `.OP`, `.AC`, or `.TRAN` directive. Supported `.OPTIONS` keys: METHOD, SPICEREFNODE, DVCC, DVDD. Unknown elements/directives yield `FIXTURE_*` before simulation.
+- Pin count comes from the loaded component; list order does not imply numbering. `component.designator` sets the DUT designator in NSX.
 
-Проверяются наличие SIM Implementation и Sim Port Map, совпадение ID/библиотеки/таблицы, покрытие всех выводов, связность цепей, порядок узлов в NSX по реальному Sim Port Map и SDF текущего запуска. Проверки, `measurements` и `output.graphs` используют общий SDF-парсер, Validator и Measurement Engine. `sweep` и температурные серии в DbLib-режиме пока не поддерживаются и отклоняются до симуляции.
+The runner verifies SIM Implementation, Sim Port Map, component source/table/ID, pin coverage, net connectivity, NSX node order derived from the actual Sim Port Map, and freshness of the run's SDF. Checks, measurements, and graphs share the SDF parser, Validator, and Measurement Engine. DbLib sweeps and temperature series are not supported.
 
-Ограничения: `.DC` в проектом режиме отклоняется как `FIXTURE_ANALYSIS_UNSUPPORTED`; AC impedance требует токовых probe; многосекционные УГО дают `MULTIPART_UNSUPPORTED`. BJT-приёмка отмечена `BLOCKED`, поскольку в `MY_LIB` нет BJT.
+Project-mode `.DC` is rejected as `FIXTURE_ANALYSIS_UNSUPPORTED`; AC impedance needs current probes. Multipart symbols yield `MULTIPART_UNSUPPORTED`. BJT acceptance was `BLOCKED` in the reference library because no BJT was available.
 
-Созданные DUT, Wire и Net Label удаляются по журналу после любого исхода; вкладки и документы Altium не закрываются. Успешная очистка требует подтверждённого удаления объектов, сохранения постоянных элементов схемы и успешного `DoFileSave()` очищенного SchDoc. Ошибка удаления или сохранения переводит результат в `ERROR` с `SCHEMATIC_CLEANUP_FAILED`; исходная ошибка симуляции при этом сохраняется в диагностике. Рабочие файлы всегда остаются в `temp/dblib_runs/<run_id>/` (`report.json`, `status.txt`, NSX, SDF). Исходный шаблон `dblib_resources/template` не изменяется.
+DUTs, wires, and net labels created during a run are removed using an object journal, even on failure. Tabs and documents remain open. Success requires removing all created objects, preserving permanent fixture objects, and saving the cleaned SchDoc with `DoFileSave()`. Cleanup errors produce `ERROR / SCHEMATIC_CLEANUP_FAILED` and preserve the original simulation error in diagnostics. Work files remain in `temp/dblib_runs/<run_id>/` (report.json, status.txt, NSX, SDF); `dblib_resources/template` remains unchanged.
 
-Если MixedSim сформировал несколько графиков с одинаковым анализом и набором сигналов, они сравниваются полностью: имена, единицы, тип данных, количество точек, массивы X/Y и комплексные составляющие. Идентичные дубликаты схлопываются, а различающиеся дают `ERROR / SDF_DUPLICATE_CONFLICT`.
+Duplicate charts are compared across analysis, signals, units, data types, sample counts, and complete real/complex X/Y arrays. Identical duplicates are merged; conflicting ones yield `ERROR / SDF_DUPLICATE_CONFLICT`.
 
-Отчёт дополнительно содержит `component`, `run_id`, `stages`, `artifacts` и `error`. Типовые коды ошибок: `LIBRARY_PATH_INVALID`, `LIBRARY_NOT_FOUND`, `PAGE_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `COMPONENT_NO_PINS`, `COMPONENT_PIN_NOT_FOUND`, `COMPONENT_PIN_AMBIGUOUS`, `COMPONENT_PIN_UNASSIGNED`, `COMPONENT_PIN_CONNECTION_FAILED`, `COMPONENT_NETLIST_MISMATCH`, `COMPONENT_SIM_MODEL_MISSING`, `COMPONENT_SIM_PORT_MAP_INVALID`, `MULTIPART_UNSUPPORTED`, `FIXTURE_ELEMENT_UNSUPPORTED`, `FIXTURE_ANALYSIS_UNSUPPORTED`, `MISSING_SIMULATION_MODEL`, `SIM_PORT_MAP_MISSING`, `CONNECTIVITY_FAILED`, `NSX_NOT_GENERATED`, `NSX_INVALID`, `SDF_NOT_SAVED`, `SDF_DUPLICATE_CONFLICT`, `SCHEMATIC_CLEANUP_FAILED`.
+Additional report fields include `component`, `run_id`, `stages`, `artifacts`, and `error`. Common codes: `LIBRARY_PATH_INVALID`, `LIBRARY_NOT_FOUND`, `PAGE_NOT_FOUND`, `COMPONENT_NOT_FOUND`, `COMPONENT_NO_PINS`, `COMPONENT_PIN_NOT_FOUND`, `COMPONENT_PIN_AMBIGUOUS`, `COMPONENT_PIN_UNASSIGNED`, `COMPONENT_PIN_CONNECTION_FAILED`, `COMPONENT_NETLIST_MISMATCH`, `COMPONENT_SIM_MODEL_MISSING`, `COMPONENT_SIM_PORT_MAP_INVALID`, `MULTIPART_UNSUPPORTED`, `FIXTURE_ELEMENT_UNSUPPORTED`, `FIXTURE_ANALYSIS_UNSUPPORTED`, `MISSING_SIMULATION_MODEL`, `SIM_PORT_MAP_MISSING`, `CONNECTIVITY_FAILED`, `NSX_NOT_GENERATED`, `NSX_INVALID`, `SDF_NOT_SAVED`, `SDF_DUPLICATE_CONFLICT`, and `SCHEMATIC_CLEANUP_FAILED`.
 
-### Формат теста
+### Test JSON Format
 
 ```json
 {
@@ -153,13 +139,13 @@ python batch_agent.py temp/inputs/a.json temp/inputs/b.json `
 }
 ```
 
-Обязательны `name`, полный текст `spice` с заголовком в первой строке и непустой массив `checks`. Методы измерения: `first`, `last`, `min`, `max`. Границы включительные и конечные, сигналы сопоставляются без учёта регистра. Все проверки выполняются независимо; ошибка имеет приоритет над FAIL.
+`name`, a complete `spice` text (header on first line), and a nonempty `checks` array are required for basic standalone tests. Supported check reductions are `first`, `last`, `min`, and `max`. Limits are inclusive finite values; signal names are case-insensitive; checks run independently and errors take precedence over FAIL.
 
-Для внешних моделей добавьте `"models": ["models/diode.lib"]`. Пути разрешаются относительно JSON и подключаются через `.include`. Пример — `examples/diode.json`.
+For external models, add `"models": ["models/diode.lib"]`. Paths resolve relative to the input JSON and are included via `.include`. See `examples/diode.json`.
 
-### AC и импеданс
+### AC and Impedance
 
-Примеры:
+Run the example tests:
 
 ```powershell
 python spice_sifter.py examples/ac_resistor.json
@@ -168,9 +154,9 @@ python spice_sifter.py examples/ac_inductor.json
 python spice_sifter.py examples/ac_rc.json
 ```
 
-В `spice` задайте источник с `AC 1`, директиву `.AC` и `.PLOT AC` для напряжения и тока. Частотная сетка берётся из исходного SPICE без изменений. В примерах ток измеряется нулевым источником `VSENSE`; его имя в SDF — `i(vsense)` (регистр не важен).
+Supply `AC 1` for the source, an `.AC` directive, and `.PLOT AC` for voltage and current. The original SPICE frequency grid is preserved. The examples use a zero-volt `VSENSE` source to measure current; the SDF name is `i(vsense)` (case-insensitive).
 
-AC-проверка:
+Example AC check:
 
 ```json
 {
@@ -187,15 +173,15 @@ AC-проверка:
 }
 ```
 
-`component` выбирается из `real`, `imag`, `magnitude`. Формула: `Z = V / (current_sign * I)`, единица — Ом. `current_sign` обязателен и равен 1 или -1; программа не подбирает знак по ожиданиям. Порог модуля тока задаётся необязательным `min_current_a` (по умолчанию `1e-15` А).
+`component` selects `real`, `imag`, or `magnitude`. `Z = V / (current_sign * I)` in ohms. `current_sign` is required (1 or −1), never inferred from expected results. Optional `min_current_a` defaults to 1e−15 A.
 
-`frequency_sampling` по умолчанию `interpolate`: отдельно линейно интерполируются комплексные V и I по частоте в герцах, затем вычисляется отношение. `exact` требует точку исходной сетки (относительный допуск сравнения `1e-10`). Экстраполяции нет. Интерполяция приближённая; вблизи резонансов нужна достаточно плотная частотная сетка. Сетки V/I должны совпадать. При нескольких подходящих Chart выбор отклоняется как неоднозначный.
+`frequency_sampling` defaults to `interpolate`: V and I are separately interpolated as complex values, linearly in hertz, **before** division. `exact` requires a source-grid point with 1e−10 relative comparison tolerance. No extrapolation. Interpolation is approximate and requires a sufficiently dense grid around resonances. V/I grids must match; ambiguous Charts are rejected.
 
-Для обычных проверок DC укажите `analysis: "dc"`, сохранив `signal`, `measurement`, `min`, `max`. Проверки без `analysis` по-прежнему относятся к Transient.
+Regular DC checks use `analysis: "dc"` with signal, measurement, min, and max. Checks without `analysis` continue to mean transient.
 
-### Массивы графиков
+### Graph Arrays
 
-Добавьте необязательный раздел в тест:
+Add an optional `output` section:
 
 ```json
 {
@@ -215,15 +201,15 @@ AC-проверка:
 }
 ```
 
-Полные примеры — `examples/ac_graph_full.json` и `examples/ac_graph_limited.json`. Без `max_points` возвращаются все точки; значение должно быть целым числом не меньше 2. При сокращении сохраняются первая и последняя точки и равномерно выбираются промежуточные индексы. Такая выборка может пропускать узкие пики и резонансы. На числовые проверки сокращение не влияет.
+See `examples/ac_graph_full.json` and `examples/ac_graph_limited.json`. Without `max_points`, all points are returned; otherwise the value must be an integer of at least 2. Decimation preserves endpoints and uniformly samples intermediate indices, potentially missing narrow resonances. Numeric checks always use full-resolution data.
 
-Для одного сигнала используйте `type: "signal"`, `signal: "v(out)"`, необязательный `analysis` (`tran`, `dc`, `op`, `ac`) и `components`. У действительных сигналов допустим только `real`; у AC — `real`, `imag`, `magnitude`. Если `components` не задан, возвращается `real`. Имена графиков должны быть уникальными.
+For individual signals use `type: "signal"`, `signal: "v(out)"`, optional `analysis` (tran/dc/op/ac), and `components`. Real signals support only `real`; complex AC supports `real`, `imag`, and `magnitude`. The default component is real. Graph names must be unique.
 
-В `graphs` отчёта возвращаются `x`, выбранные массивы компонентов, `x_unit`, `y_unit`, `points_total`, `points_returned`. Все массивы синхронизированы и содержат числовые данные SDF без округления. Графики возвращаются и при FAIL. Если `output.graphs` отсутствует или пуст, поля `graphs` нет. Изображения не создаются.
+Report `graphs` contain `x`, selected component arrays, `x_unit`, `y_unit`, `points_total`, and `points_returned`. Arrays are synchronized, unrounded SDF numerical data. Graphs are returned even on FAIL, omitted entirely when not requested, and never rendered as images.
 
-### Температурные испытания
+### Temperature Testing
 
-Одиночная температура задаётся в SPICE директивой `.TEMP 25` (регистр не важен; разрешены отрицательные и дробные значения). Для серии добавьте верхнеуровневое поле `"temperatures_c": [-40, 25, 85]`. В серии исходный SPICE не должен содержать `.TEMP` или `.OPTIONS TEMP`.
+A single temperature is provided using `.TEMP 25` in SPICE (negative/fractional values supported). For a series, add `"temperatures_c": [-40, 25, 85]` at top level. In series mode, the source SPICE must not already contain `.TEMP` or `.OPTIONS TEMP`.
 
 ```powershell
 python spice_sifter.py examples/temperature_single.json
@@ -232,25 +218,21 @@ python spice_sifter.py examples/temperature_ac.json
 python spice_sifter.py examples/temperature_graphs.json
 ```
 
-**Особенность MixedSim 24.4:** в самостоятельном NSX прямая `.TEMP` не изменила характеристики проверенного диода. Подтверждённая альтернатива — `.OPTIONS TEMP=<значение>`. Spice Sifter принимает `.TEMP` во входе и преобразует её в `.OPTIONS TEMP` только в рабочем NSX; в отчёте указывает `temperature_method: "OPTIONS TEMP"`. Исходные тесты и модели не изменяются.
+**MixedSim 24.4 behavior:** direct `.TEMP` in standalone NSX did not change the tested diode. The verified alternative is `.OPTIONS TEMP=<value>`. Spice Sifter accepts `.TEMP` as input and converts it only in the working NSX, reporting `temperature_method: "OPTIONS TEMP"`; original tests/models remain untouched.
 
-Температуры задаются в °C, должны быть конечными и выше −273,15 °C. Пустые списки, дубликаты, несколько активных `.TEMP`, несколько значений на директиву, вложенная `.TEMP` и конфликт с `.OPTIONS TEMP` отклоняются до запуска. Комментарии не считаются активными директивами. `TNOM` и локальные температурные параметры моделей не изменяются. Одинаковые результаты при разных температурах сами по себе не являются ошибкой: модель может не иметь температурной зависимости.
+Temperatures are finite degrees Celsius values above −273.15 °C. Empty/duplicate lists, multiple active .TEMP directives, multiple values on one directive, nested .TEMP, and conflicts with .OPTIONS TEMP are rejected before simulation. Comments are not active directives. TNOM and local model temperature settings are unchanged. Equal results at different temperatures do not necessarily indicate an error.
 
-У проверки можно указать `temperature_c`: она применяется только к этой температуре. Без поля проверка выполняется во всех запусках серии. Это действует для обычных измерений и AC-импеданса. Ссылка на отсутствующую температуру — `INPUT_INVALID`.
+A check's `temperature_c` restricts it to that temperature; otherwise it runs for all temperatures. This also applies to AC impedance checks. Unknown referenced temperatures cause INPUT_INVALID. Graphs reside inside `runs[i].graphs`, carry `temperature_c`, and can be filtered with a graph-level `temperatures_c`. Each graph has its own `max_points`.
 
-Графики группируются **внутри соответствующих элементов `runs`** и содержат `temperature_c`. Необязательный фильтр графика `"temperatures_c": [-40, 85]` исключит +25 °C; без фильтра график возвращается для всей серии. `max_points` действует отдельно на каждый график. Без `output.graphs` массивов нет.
+Single `.TEMP` maintains the legacy response structure with an added `temperature_c`; a JSON temperature list always generates `runs` and `summary`. The overall ERROR takes precedence over FAIL. Other temperatures' results survive a failure. Every temperature has its own run_id, NSX, SDF, and timeout.
 
-Одиночная `.TEMP` сохраняет прежнюю структуру ответа, добавляя `temperature_c`. JSON-массив температур, даже из одного элемента, возвращает `runs` в исходном порядке и `summary` с числами total/passed/failed/errors. Общий ERROR имеет приоритет над FAIL. Результаты остальных температур сохраняются при ошибке; после тайм-аута небезопасные запуски блокируются существующей защитой BUSY.
+`simulation_status` indicates whether simulation data were read successfully, `checks_count` counts performed assertions, and `checks_status` can be PASS/FAIL/ERROR/NOT_RUN/NOT_CONFIGURED. Empty `checks: []` are allowed for temperature tests; PASS alone does not mean datasheet compliance.
 
-Каждая температура имеет отдельные `run_id`, NSX и SDF и собственное ограничение `--timeout`. `simulation_status` показывает успешность чтения результатов моделирования, `checks_count` — число выполненных проверок, `checks_status` — PASS/FAIL/ERROR, NOT_RUN или NOT_CONFIGURED. У температурных тестов допускается `checks: []`: PASS такого запуска подтверждает завершение моделирования, а не соответствие электрическим допускам.
-
-Ошибки температурного входа имеют `code: "INPUT_INVALID"` и уточнение `temperature_code`: TEMP_INVALID, TEMP_CONFLICT, TEMP_CHECK_NOT_FOUND или TEMP_GRAPH_NOT_FOUND. Ошибки запуска сохраняют исходный code/message и температурную категорию TEMP_RUN_FAILED или TEMP_RESULT_MISSING. TEMP_UNSUPPORTED и TEMP_NOT_APPLIED зарезервированы для подтверждённых случаев; совпадение числовых результатов не используется как основание для них.
-
-Без `.TEMP` и `temperatures_c` температурные поля не добавляются; предыдущие JSON-тесты работают как раньше. Для `.OP` указывайте `analysis: "op"` и `.PLOT OP V(out)` в SPICE; см. `examples/sweep_op.json`. У OP-графика ось X безразмерная (`x_unit: "1"`).
+Invalid inputs return `INPUT_INVALID` with `temperature_code`: TEMP_INVALID, TEMP_CONFLICT, TEMP_CHECK_NOT_FOUND, TEMP_GRAPH_NOT_FOUND. Runtime errors retain code/message and use TEMP_RUN_FAILED or TEMP_RESULT_MISSING. TEMP_UNSUPPORTED and TEMP_NOT_APPLIED are reserved for confirmed problems, not merely matching numeric values. Without temperature options, legacy JSON is unchanged. OP requires `analysis: "op"` and `.PLOT OP V(out)`; see `examples/sweep_op.json`. OP graph X is dimensionless (`x_unit: "1"`).
 
 ### Parameter Sweep
 
-Добавьте `sweep.parameters` и числовые плейсхолдеры `{{NAME}}` в основной SPICE-текст:
+Define `sweep.parameters` and numeric `{{NAME}}` placeholders in the main SPICE text:
 
 ```json
 {
@@ -268,6 +250,8 @@ python spice_sifter.py examples/temperature_graphs.json
 }
 ```
 
+Run examples:
+
 ```powershell
 python spice_sifter.py examples/sweep_linear.json
 python spice_sifter.py examples/sweep_divider.json --keep-files
@@ -278,25 +262,23 @@ python spice_sifter.py examples/sweep_op.json
 python spice_sifter.py examples/sweep_dc.json
 ```
 
-Для параметра задаётся либо `values`, либо `start`, `stop`, `step`. Например, `{"start": 0, "stop": 5, "step": 0.5}` даёт 11 значений. Допускаются отрицательные значения и отрицательный шаг. Шаг не равен нулю и направлен к stop; конечная точка включается только при попадании на сетку. Сетка строится через Decimal без накопления ошибок сложения float.
+Each parameter uses either `values` or `start`/`stop`/`step`. For example `{"start":0,"stop":5,"step":0.5}` creates 11 values. Negative values and decreasing grids are supported. Step must be nonzero and point toward the stop; stop is included only if on the grid. Decimal arithmetic avoids accumulated float stepping error.
 
-Имена чувствительны к регистру: латинская буква или подчёркивание, затем буквы, цифры и подчёркивания. Значения — только конечные числа, не строки и не bool. Пустые сетки, дубликаты, неиспользуемые параметры и неразрешённые плейсхолдеры отклоняются. Внешние модели не редактируются. Для температуры используйте прежние `temperatures_c` или постоянную `.TEMP`; температурное поле не превращается автоматически в плейсхолдер.
+Names are case-sensitive ASCII identifiers beginning with a letter/underscore, followed by letters/digits/underscores. Values must be finite numbers, not strings or booleans. Empty/duplicate grids, unused parameters, and unresolved placeholders are rejected. External models are not modified. Temperatures use `temperatures_c` or a constant `.TEMP`, not implicit placeholders.
 
-Перебирается декартово произведение: первый параметр меняется медленнее последнего. При совместном `temperatures_c` температура образует внешний цикл. До Altium проверяется полное число запусков с учётом температур; максимум по умолчанию — 100. Увеличить осознанно: `--max-runs 200`. При превышении возвращается `INPUT_INVALID` с рассчитанным числом, без частичного моделирования.
+The Cartesian product iterates the first parameter slower than the last; temperatures form the outermost loop. Total combinations, including temperatures, are checked **before** launching Altium. Default maximum is 100; explicitly raise it with `--max-runs 200`. Exceeding the limit yields INPUT_INVALID without partial simulation.
 
-У проверки и запроса графика необязательное `when` ограничивает комбинации. Например, `"when": {"VIN": 5}` выбирает все значения RLOAD при VIN=5. Все ключи и значения фильтра проверяются до моделирования; близкие представления float допускаются только при однозначном совпадении с сеткой. `temperature_c` в проверках и `temperatures_c` в графиках продолжают действовать одновременно с `when`.
+Check and graph `when` filters select combinations, such as `{"VIN":5}`. Filter names and values are validated before simulation; float-near matches require a unique grid candidate. `temperature_c` for checks and `temperatures_c` for graphs still apply alongside `when`.
 
-При наличии sweep ответ всегда содержит `runs` и `summary`, даже для одной комбинации. Каждый запуск имеет `run_id`, `parameters`, `checks_count`, `simulation_status`, `checks_status`; температура добавляется только при явном задании. Графики находятся в `runs[i].graphs` и содержат те же run_id/parameters/temperature_c. Параметры без применимых проверок разрешены, включая `checks: []`: статус NOT_CONFIGURED не подтверждает соответствие допускам.
+With sweep, the response always has `runs` and `summary`, even for one combination. Runs include run_id, parameters, checks_count, simulation_status, checks_status, and optional temperature. Graphs are inside `runs[i].graphs` with corresponding context. Combinations without applicable checks, including empty checks, are allowed; NOT_CONFIGURED does not imply compliance.
 
-После обычной ошибки моделирования перебор продолжается. После тайм-аута, BUSY, потери Altium или невозможности проверить его состояние новые комбинации не запускаются. Уже полученные результаты остаются в runs, summary дополнительно содержит completed (число записей runs) и not_run; total остаётся полным плановым числом. ERROR имеет приоритет над FAIL. Ограничение времени применяется отдельно к каждой комбинации.
+Ordinary per-run failures allow following runs. TIMEOUT, BUSY, lost Altium, or unknown process state stop remaining combinations. Completed runs stay available; `summary.completed` counts recorded runs, `summary.not_run` counts omitted runs, and `summary.total` remains the planned total. ERROR takes precedence over FAIL; timeout applies per combination.
 
-Ошибки входа: `code: "INPUT_INVALID"` с `sweep_code`: SWEEP_INVALID, SWEEP_EMPTY, SWEEP_DUPLICATE_VALUE, SWEEP_INVALID_RANGE, SWEEP_PARAMETER_UNUSED, SWEEP_PLACEHOLDER_MISSING, SWEEP_TOO_MANY_RUNS или SWEEP_CHECK_INVALID. Ошибки выполнения сохраняют исходные code/message и уточняются как SWEEP_RUN_FAILED либо SWEEP_RESULT_MISSING.
+Input `sweep_code` values include SWEEP_INVALID, SWEEP_EMPTY, SWEEP_DUPLICATE_VALUE, SWEEP_INVALID_RANGE, SWEEP_PARAMETER_UNUSED, SWEEP_PLACEHOLDER_MISSING, SWEEP_TOO_MANY_RUNS, and SWEEP_CHECK_INVALID. Runtime failures preserve original messages and may use SWEEP_RUN_FAILED or SWEEP_RESULT_MISSING. NSX/SDF tabs are not automatically closed. Native Altium sweep, .STEP, zip, random, and parallel simulations are not used.
 
-NSX и SDF автоматически **не закрываются**; вкладки Altium остаются открытыми. Нативный Parameter Sweep, `.STEP`, zip, случайные и параллельные испытания не используются.
+### Automatic Measurements
 
-### Автоматические измерения
-
-Массив `measurements` извлекает характеристики из SDF без повторного моделирования ради каждого измерения:
+Optional `measurements` extracts characteristics from existing SDF without additional simulations for each measurement:
 
 ```json
 {
@@ -306,7 +288,7 @@ NSX и SDF автоматически **не закрываются**; вкла�
 }
 ```
 
-Это раздел основного JSON, а не отдельный входной файл. id уникален, limits необязателен; checks: [] допустим при наличии измерений. Статусы измерений — MEASURED без допусков, PASS/FAIL с допусками, ERROR при невозможности расчёта. Общий статус учитывает измерения; существующие checks/runs/summary не переписываются.
+This is part of the main test JSON, not a separate input. IDs are unique; limits are optional; `checks: []` is allowed with measurements. MEASURED means no limits, PASS/FAIL applies limits, and ERROR indicates calculation failure. Existing checks/runs/summary are preserved.
 
 ```powershell
 python spice_sifter.py examples/measure_transient.json
@@ -315,29 +297,27 @@ python spice_sifter.py examples/measure_resonance.json
 python spice_sifter.py examples/measure_mosfet.json --keep-files
 ```
 
-Доступны at, crossing, mean, rms, peak_to_peak/ripple, rise_time, fall_time, delay, settling_time, cutoff_3db, resonant_frequency, capacitance_series, inductance_series, esr, sweep_crossing и rds_on. Работают when и temperature_c; семейства разных температур не смешиваются. Расчёты используют полные массивы до max_points. При запросе markers возвращаются диагностические координаты, без изображений.
+Available types: at, crossing, mean, rms, peak_to_peak/ripple, rise_time, fall_time, delay, settling_time, cutoff_3db, resonant_frequency, capacitance_series, inductance_series, esr, sweep_crossing, and rds_on. `when` and `temperature_c` are supported; different temperatures never mix. Full SDF arrays are processed before `max_points`. Optional markers provide diagnostic coordinates, not images.
 
-Результаты находятся в верхнеуровневом measurements с run_id или scope=sweep/run_ids. Ошибка одного измерения не удаляет остальные результаты и не вызывает повторной симуляции. Отсутствие limits не подтверждает соответствие datasheet. Без measurements прежний формат ответа сохраняется.
+Top-level `measurements` results identify `run_id` or `scope=sweep`/`run_ids`. A failure in one measurement does not erase others or rerun simulation. Without limits, a measurement never asserts datasheet compliance. Without measurements, the prior response format remains. See [Measurements](MEASUREMENTS.md) and [Measurement Verification](MEASUREMENT_VERIFICATION.md).
 
-[Полный формат, алгоритмы и ограничения](MEASUREMENTS.md) · [Результаты проверки](MEASUREMENT_VERIFICATION.md).
+### Results and Errors
 
-### Результат и ошибки
+stdout contains exactly one compact JSON. Exit codes: PASS=0, FAIL=1, ERROR=2. Diagnostics go to stderr. With preserved files, the report includes `artifacts` and `diagnostics`.
 
-stdout содержит только один компактный JSON. Статусы и коды завершения: `PASS` — 0, `FAIL` — 1, `ERROR` — 2. Диагностика направляется в stderr. При сохранении артефактов отчёт содержит `artifacts` и `diagnostics`.
+Working files are under `%TEMP%/SpiceSifter/<run_id>`. By default, successful temporary runs are cleaned after reading; execution errors preserve artifacts. If the script never starts before timeout, return SCRIPT_NOT_EXECUTED; if it started but did not finish, return TIMEOUT.
 
-Рабочие файлы находятся в `%TEMP%/SpiceSifter/<run_id>`. По умолчанию после чтения результата они удаляются; при ошибке выполнения сохраняются. Если скрипт не начал работу до истечения времени, возвращается `SCRIPT_NOT_EXECUTED`; если начал, но не завершился — `TIMEOUT`.
+If a following call reports BUSY after a timeout, run `doctor --json` and follow the documented safe `recover` procedure. **Never manually delete an active or uncertain pending-run marker.**
 
-Если следующий запуск возвращает `BUSY` после тайм-аута, дождитесь завершения предыдущего. Если он так и не завершился, вручную убедитесь, что симуляция в Altium больше не выполняется, затем удалите `%TEMP%/SpiceSifter/pending-run.txt`.
+### Verifying the Installation
 
-### Проверка установки
-
-Автономные тесты:
+Standalone tests:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Приёмочные проверки с открытым Altium:
+Live acceptance with Altium running:
 
 ```powershell
 python tests/acceptance.py
@@ -347,4 +327,4 @@ python tests/acceptance_sweep.py
 python tests/acceptance_measurements.py
 ```
 
-AC-ошибки: `AC_CHART_NOT_FOUND`, `AC_WAVE_NOT_FOUND`, `AC_COMPLEX_NOT_AVAILABLE`, `AC_FREQUENCY_OUT_OF_RANGE`, `AC_FREQUENCY_GRID_MISMATCH`, `IMPEDANCE_DIVISION_BY_ZERO`, `NON_FINITE_RESULT`, `GRAPH_EXPORT_ERROR`. Неоднозначный или неизвестный формат — `UNSUPPORTED_FORMAT`. NaN и Infinity не выводятся как JSON-числа.
+AC error codes include AC_CHART_NOT_FOUND, AC_WAVE_NOT_FOUND, AC_COMPLEX_NOT_AVAILABLE, AC_FREQUENCY_OUT_OF_RANGE, AC_FREQUENCY_GRID_MISMATCH, IMPEDANCE_DIVISION_BY_ZERO, NON_FINITE_RESULT, and GRAPH_EXPORT_ERROR. Ambiguous/unknown formats produce UNSUPPORTED_FORMAT. NaN and Infinity are never serialized as JSON numbers.
