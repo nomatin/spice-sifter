@@ -1,35 +1,35 @@
-# Проверка Spice Sifter 0.1 — исторический отчёт
+# Spice Sifter 0.1 Verification — Historical Report
 
-Актуальная версия: [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md). Ограничения и результаты ниже относятся к MVP 1.
+For more recent results, see [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md). The limitations and results below apply to MVP 1.
 
-Дата: 30 октября 2026. Среда: Windows, Altium Designer 24.4.1.13, Python 3.14.5.
+**Date:** October 30, 2026. **Environment:** Windows, Altium Designer 24.4.1.13, Python 3.14.5.
 
-Рабочий сценарий: уже открытый Altium, один входной JSON, одна команда spice_sifter.py, автоматическая симуляция MixedSim, сохранение SDF, собственный бинарный парсер и числовая проверка. Без проектов Altium, установки компонентов, эмуляции ввода и внешнего SPICE-движка. Проверка открытого Altium добавлена по последующему требованию пользователя и заменяет первоначальную возможность холодного запуска.
+Tested workflow: already-running Altium, one input JSON, one `spice_sifter.py` command, automated MixedSim simulation, SDF export, a custom binary parser, and numerical validation. No Altium project, component placement, input emulation, or external SPICE engine was required. The running-Altium check was introduced after the original requirement and superseded the initial cold-start capability.
 
-## Подтверждённые результаты
+## Verified Results
 
-| Сценарий | Результат |
+| Scenario | Result |
 |---|---|
-| Делитель 5 В / 10к / 10к | PASS, 2.5 В |
-| Неверный диапазон 3.0–3.2 В | FAIL, код 1 |
-| Отсутствующий сигнал | ERROR / SIGNAL_NOT_FOUND, код 2 |
-| JSON без spice | ERROR / INPUT_INVALID до запуска |
-| Повторный запуск | PASS, отдельный run_id и SDF |
-| Несуществующая модель | ERROR / SIM_NOT_RUN с артефактами |
-| Внешняя модель, кириллица и пробелы | PASS, 0.6928681429973097 В |
-| Закрытый Altium | Автотест: ALTIUM_NOT_RUNNING, симулятор не вызывается |
-| Неотвечающий скрипт | Автотест: ограниченный тайм-аут; затем BUSY; процесс не завершается |
+| 5 V / 10 kΩ / 10 kΩ divider | PASS, 2.5 V |
+| Incorrect 3.0–3.2 V tolerance | FAIL, exit code 1 |
+| Missing signal | ERROR / SIGNAL_NOT_FOUND, exit code 2 |
+| JSON without `spice` | ERROR / INPUT_INVALID before launch |
+| Repeated run | PASS, separate `run_id` and SDF |
+| Missing model | ERROR / SIM_NOT_RUN with artifacts |
+| External model with Cyrillic characters and spaces in path | PASS, 0.6928681429973097 V |
+| Altium not running | Unit test: ALTIUM_NOT_RUNNING; simulator not invoked |
+| Unresponsive script | Unit test: bounded timeout, then BUSY; process not terminated |
 
-Реальные отчёты семи запусков: tests/acceptance_report.json. Все семь проверок прошли. Автотесты: 18/18. Включён реальный SDF делителя из целевой версии; дополнительно парсер проверялся на локальном реальном файле с двумя Chart и 457 Wave. Его происхождение по версии не установлено, поэтому он не используется как доказательство совместимости 24.4.
+Actual reports from seven runs: `tests/acceptance_report.json`. All seven acceptance scenarios passed; unit tests: **18/18**. A real divider SDF from the target version is included. The parser was additionally checked with a local real SDF containing two Charts and 457 Waves; its exact source version was unknown, so it was not used to establish 24.4 compatibility.
 
-## Границы версии
+## Version Limitations
 
-- Только .TRAN и действительные значения. .OP не заявляется без отдельной приёмки. Комплексные данные явно отклоняются; архитектура SDFWave допускает дальнейшее расширение.
-- Полные сообщения панели MixedSim пока не экспортируются: доступны команда, исходный netlist, сгенерированные скрипты, статус и список файлов. Это известное ограничение диагностики, а не подтверждение отсутствия ошибок MixedSim.
-- Проверка закрытого приложения и неотвечающего скрипта автоматизирована с подменой процессного вызова. Пользовательский Altium для этих проверок не закрывался и не подвешивался.
-- Кириллические пути моделей проверены с короткими именами Windows; при отключённых коротких именах требуется путь ASCII. Рекурсивные относительные include внутри моделей не заявлены.
-- После тайм-аута незавершённый запуск блокирует следующий. Если статус не появится, требуется ручная проверка Altium перед удалением pending-run.txt.
+- Only `.TRAN` and real-valued signals were supported. `.OP` was not claimed without separate acceptance testing. Complex data were explicitly rejected, though the SDFWave architecture allowed later extensions.
+- Full MixedSim panel messages were not exported. Available diagnostics included the command, source netlist, generated scripts, status, and artifact list. This is a known diagnostic limitation, not proof that MixedSim produced no errors.
+- Tests for an absent Altium process and an unresponsive script used mocks for process invocation; the user's Altium was neither closed nor deliberately hung.
+- Cyrillic model paths were tested using Windows short names. If short names are disabled, ASCII paths are required. Recursive relative includes inside models were not claimed.
+- After a timeout, an unresolved run blocks subsequent runs. If no status appears, Altium must be inspected manually before deleting `pending-run.txt`.
 
-Новые API Altium не предполагаются рабочими без испытаний. Указанные ограничения не маскируются успешным отчётом.
+New Altium APIs are not considered functional without tests. Successful reports do not hide the listed limitations.
 
-Исторический отчёт MVP 1. Актуальные результаты AC и регрессии версии 0.2 — в AC_VERIFICATION.md.
+This is the historical MVP 1 report. AC results and the 0.2 regression are documented in [AC_VERIFICATION.md](AC_VERIFICATION.md).
