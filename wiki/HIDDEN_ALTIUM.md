@@ -1,101 +1,53 @@
-# Скрытый экземпляр Altium
+# Hidden Altium Instance
 
-Техническое описание изолированного запуска Altium Designer в Spice Sifter 0.6. Команды и общие параметры см. в [руководстве пользователя](User-Guide.md), порядок пакетной интеграции — в [руководстве для агентов](AGENT_INTEGRATION.md).
+Technical details of isolated Altium Designer execution in Spice Sifter 0.6. See the [User Guide](User-Guide.md) for usage and [Agent Integration](AGENT_INTEGRATION.md) for batch workflows.
 
-По умолчанию Spice Sifter работает с уже открытым Altium Designer
-(`--altium-instance current`). Режим `hidden` запускает **собственный** Altium на
-отдельном невидимом Win32 Desktop: пользовательский экземпляр не перезапускается,
-не получает скрипты и не меняет открытые документы. `SwitchDesktop`,
-`SendInput`, `taskkill /IM X2.EXE` и глобальное завершение процессов не
-используются.
+By default, Spice Sifter uses an already-running Altium Designer instance (`--altium-instance current`). The `hidden` mode starts its **own** Altium instance on a separate, invisible Win32 Desktop. It neither restarts the user's Altium, sends it scripts, nor changes any of its open documents. It does not use `SwitchDesktop`, `SendInput`, `taskkill /IM X2.EXE`, or global process termination.
 
 ```powershell
-# Одиночный тест: Spice Sifter сам запускает и завершает скрытый Altium
+# One test: Spice Sifter starts and stops its own hidden Altium
 python spice_sifter.py examples/dblib_resistor_r0009.json --altium-instance hidden
 
-# Пачка: один скрытый экземпляр на всю серию, свежий при каждом вызове
+# Batch: a single hidden instance for this batch, fresh on every invocation
 python batch_agent.py tests_list\a.json tests_list\b.json `
   --altium-instance hidden --timeout 180 --ready-timeout 120
 ```
 
-`--ready-timeout` (по умолчанию 120 с) ограничивает только запуск и проверку
-готовности Altium; `--timeout` остаётся таймаутом одного испытания. Холодный
-старт Altium 24.4 занимает 30–45 с, поэтому значения ниже 90 с не рекомендуются.
+`--ready-timeout` (default 120 s) limits instance startup and readiness checking only; `--timeout` is still the timeout for a single test. A cold Altium 24.4 startup takes approximately 30–45 s; values below 90 s are not recommended.
 
-## Как это устроено
+## Implementation
 
-- Создаётся Desktop `SpiceSifterHidden-<id>` (`CreateDesktopW`), Altium
-  запускается с `STARTUPINFO.lpDesktop` на нём.
-- Экземпляр идентифицируется парой **PID + время создания**; перед каждым
-  скриптом и перед завершением идентичность перепроверяется.
-- Все процессы Spice Sifter входят в собственный Job Object с
-  `KILL_ON_JOB_CLOSE`; завершается только он. Штатный `WM_CLOSE` не
-  используется: Altium 24.4 отвечает диалогом `Confirm Save Locally`.
-- Создание и настройка Job Object проверяются. Основной процесс и каждый
-  `-R`-launcher создаются приостановленными (`CREATE_SUSPENDED`), добавляются в
-  Job Object и только затем возобновляются. Если присоединение не удалось,
-  запуск завершается с `HIDDEN_LAUNCH_FAILED`, а созданный процесс немедленно
-  уничтожается; неуправляемый Altium не может стать `READY`.
-- Одиночный `--altium-instance hidden` перед запуском проверяет предыдущий
-  скрытый сеанс под общей блокировкой: `ACTIVE`/`UNKNOWN`/`CORRUPTED`
-  запрещают старт, доказанно `STALE`-запись удаляется.
-- Batch-блокировка принадлежит конкретному потоку: вложенный вызов из того же
-  потока разрешён, из другого — возвращает `BUSY`. Межпроцессная блокировка
-  `altium.lock` сохраняется.
-- Ошибка завершения делает итоговый статус теста `ERROR` (`HIDDEN_STOP_FAILED`
-  или более точный код), уже полученные результаты сохраняются, а
-  `hidden-session.json` не удаляется, пока отсутствие управляемого процесса не
-  подтверждено. `doctor`/`recover` обрабатывают такое состояние.
-- Каждая команда `X2.EXE -RScriptingSystem:RunScriptFile(...)`, включая
-  дополнительный `collect.pas`, создаётся на скрытом Desktop. Это и есть
-  адресация: Altium исполняет `-R` тем экземпляром, чей Desktop указан в
-  `STARTUPINFO`.
-- Готовность подтверждается не окном, а контрольным DelphiScript: его документ
-  появляется только на скрытом Desktop и принадлежит PID скрытого экземпляра.
-- После пачки экземпляр завершается; следующий вызов создаёт новый. Постоянного
-  демона и общего экземпляра между пачками нет.
+- Spice Sifter creates a Desktop named `SpiceSifterHidden-<id>` via `CreateDesktopW` and starts Altium with `STARTUPINFO.lpDesktop` pointing to it.
+- Instance identity is the combination of **PID and process creation time**. Both are checked before every script and again before termination.
+- The managed processes belong to a dedicated Job Object configured with `KILL_ON_JOB_CLOSE`; only that job is terminated. Normal `WM_CLOSE` is avoided because Altium 24.4 shows a `Confirm Save Locally` dialog.
+- Creation and configuration of the Job Object are checked. The main process and every `-R` launcher are created suspended (`CREATE_SUSPENDED`), added to the Job Object, and only then resumed. If assignment fails, the session returns `HIDDEN_LAUNCH_FAILED` and immediately kills the newly created process, so an unmanaged Altium instance cannot become `READY`.
+- Before starting a single hidden test, Spice Sifter checks earlier hidden-session state under the shared lock. `ACTIVE`, `UNKNOWN`, or `CORRUPTED` prevents startup; only a provably `STALE` record is removed.
+- The batch lock belongs to a specific thread. Nested acquisition by that same thread is allowed; acquisition by another thread returns `BUSY`. The interprocess `altium.lock` remains in effect.
+- A failure to stop the hidden instance makes the overall test status `ERROR` (`HIDDEN_STOP_FAILED` or a more specific code). Completed results are kept. `hidden-session.json` is not removed until termination of the managed process is verified; `doctor` and `recover` handle the resulting state.
+- Every `X2.EXE -RScriptingSystem:RunScriptFile(...)` invocation, including the additional `collect.pas`, is launched on the hidden Desktop. The `STARTUPINFO` Desktop selection directs `-R` commands to the intended Altium instance.
+- Readiness is established by a control DelphiScript, not by inspecting the window. Its document must appear on the hidden Desktop and belong to the hidden instance PID.
+- The instance is stopped after the batch. Each subsequent batch creates a fresh instance; there is no persistent daemon or shared instance between batches.
 
-## Требования и ограничения
+## Requirements and Limitations
 
-- Altium Designer **24.4.x**, Windows 10/11, интерактивный сеанс пользователя.
-- Нужен свободный лицензионный слот: рабочий и скрытый Altium работают
-  одновременно. Если лицензия разрешает только один экземпляр, появится
-  лицензионный диалог, и сеанс завершится с `HIDDEN_BLOCKING_DIALOG` — диалоги
-  не обходятся.
-- Создание Desktop в заблокированном или отключённом RDP-сеансе не проверялось;
-  `doctor` возвращает `HIDDEN_DESKTOP_UNAVAILABLE` с диагностикой.
-- Скрытый экземпляр использует тот же профиль `%APPDATA%`/`%LOCALAPPDATA%`;
-  Installed Libraries и файлы библиотек не изменяются.
+- Altium Designer **24.4.x**, Windows 10/11, and an interactive user session are required.
+- An available license slot is required. The user and hidden Altium instances may run simultaneously. If the license allows only one instance, the license dialog produces `HIDDEN_BLOCKING_DIALOG`; dialogs are never bypassed.
+- Creating a Desktop from a locked or disconnected RDP session has not been verified. `doctor` reports `HIDDEN_DESKTOP_UNAVAILABLE` with diagnostics.
+- The hidden Altium shares the user's `%APPDATA%` and `%LOCALAPPDATA%` profile. Installed Libraries and library files are not modified.
 
-## Диагностика и восстановление
+## Diagnostics and Recovery
 
 ```powershell
 python spice_sifter.py doctor --altium-instance hidden --json
 python spice_sifter.py recover
 ```
 
-`doctor` в hidden-режиме не требует запущенного Altium и не запускает его:
-проверяются версия, возможность создать скрытый Desktop, временная директория,
-блокировка, `pending-run`, записанный скрытый сеанс и его PID. Поля
-`hidden_desktop`, `hidden_instance`, `hidden`, `license_two_instances_allowed`
-добавлены к прежнему JSON без удаления существующих.
+In hidden mode, `doctor` does not require an already-running Altium and does not start it. It checks the application version, ability to create a hidden Desktop, temporary directory, lock, `pending-run`, recorded hidden session, and its PID. The `hidden_desktop`, `hidden_instance`, `hidden`, and `license_two_instances_allowed` JSON fields augment the existing response.
 
-`recover` никогда не завершает процессы. Запись скрытого сеанса удаляется только
-если PID **и** время создания доказывают, что процесс завершился; активный или
-непроверяемый сеанс даёт `REFUSED`/`RECOVERY_REQUIRED`. При аварийном выходе
-контроллера Job Object с `KILL_ON_JOB_CLOSE` завершает только собственный
-Altium. Состояние сеанса хранится в
-`%TEMP%\SpiceSifter\hidden-session.json`, журнал — в
-`%TEMP%\SpiceSifter\hidden-sessions.log.jsonl`.
+`recover` **never terminates processes**. A hidden-session record is removed only when both PID and creation time prove the process ended. Active or unverifiable sessions produce `REFUSED` / `RECOVERY_REQUIRED`. If the controller exits unexpectedly, its `KILL_ON_JOB_CLOSE` Job Object terminates only the managed Altium process. Session state is recorded in `%TEMP%\SpiceSifter\hidden-session.json`; the audit log is `%TEMP%\SpiceSifter\hidden-sessions.log.jsonl`.
 
-Коды ошибок hidden-режима: `HIDDEN_DESKTOP_UNAVAILABLE`,
-`HIDDEN_LAUNCH_FAILED`, `HIDDEN_READY_TIMEOUT`, `HIDDEN_BLOCKING_DIALOG`,
-`HIDDEN_PROCESS_LOST`, `HIDDEN_SCRIPT_NOT_ROUTED`, `HIDDEN_SCRIPT_TIMEOUT`,
-`HIDDEN_STATE_AMBIGUOUS`, `HIDDEN_STOP_FAILED`. Они не маскируются общим
-`SIM_NOT_RUN` и останавливают оставшиеся тесты пачки с `NOT_RUN`.
+Hidden-mode error codes: `HIDDEN_DESKTOP_UNAVAILABLE`, `HIDDEN_LAUNCH_FAILED`, `HIDDEN_READY_TIMEOUT`, `HIDDEN_BLOCKING_DIALOG`, `HIDDEN_PROCESS_LOST`, `HIDDEN_SCRIPT_NOT_ROUTED`, `HIDDEN_SCRIPT_TIMEOUT`, `HIDDEN_STATE_AMBIGUOUS`, `HIDDEN_STOP_FAILED`. These are not collapsed into a generic `SIM_NOT_RUN`; they stop the remaining tests in a batch with `NOT_RUN`.
 
-## Что Spice Sifter никогда не делает с рабочим Altium
+## What Spice Sifter Never Does to Your Working Altium Instance
 
-Не закрывает, не перезапускает, не завершает по имени процесса, не отправляет
-ему скрипты, не вызывает `SwitchDesktop`, не сохраняет пользовательские
-документы и не изменяет Installed Libraries.
+It does not close or restart it, terminate processes globally by name, send it scripts, call `SwitchDesktop`, save the user's documents, or modify Installed Libraries.
