@@ -1,111 +1,88 @@
-# Hidden Altium — proof of concept
+# Hidden Altium — Proof of Concept
 
-Проверка возможности запускать второй, независимый экземпляр Altium Designer
-на отдельном **скрытом Win32 Desktop** и адресно выполнять в нём DelphiScript и
-MixedSim, не затрагивая рабочий экземпляр Altium.
+This experiment checks whether a second, independent Altium Designer instance can run on a dedicated **hidden Win32 Desktop** and receive targeted DelphiScript and MixedSim commands without interfering with the user's working Altium instance.
 
-Итог эксперимента: **все проверки PASS** на Altium Designer 24.4.1.13
-(Windows 11 Pro, один пользовательский сеанс). Подробный отчёт —
-[`REPORT.md`](REPORT.md).
+**Result: all checks PASS** on Altium Designer 24.4.1.13 (Windows 11 Pro, one interactive user session). See the detailed [REPORT.md](REPORT.md).
 
-> Это изолированный PoC. Он не импортируется основным кодом Spice Sifter и не
-> меняет существующий механизм генерации схем, симуляции, блокировок и отчётов.
+> This is an isolated proof of concept. The production Spice Sifter code does not import it; it does not modify existing schematic generation, simulation, locking, or reporting mechanisms.
 
-## Требования
+## Requirements
 
-- Windows 10/11, Altium Designer 24.4.x.
-- Python 3.11+ (проверено на 3.14.5), только стандартная библиотека + `ctypes`.
-- Запуск из интерактивного сеанса пользователя (тот же, где работает Altium).
-- Для этапа 3/4 — существующая `.DbLib` и пример JSON с компонентом
-  (по умолчанию `examples/dblib_resistor_r0009.json` и
-  `C:\Users\Nomatin\Documents\Altium\MY_LIB\MY_LIB\MY_LIB.DbLib`).
+- Windows 10/11 and Altium Designer 24.4.x.
+- Python 3.11+ (verified with 3.14.5); only the standard library and `ctypes`.
+- Interactive user session, the same session used by the working Altium.
+- For stages 3/4, an existing `.DbLib` and a component JSON example (defaults: `examples/dblib_resistor_r0009.json` and `C:\Users\Nomatin\Documents\Altium\MY_LIB\MY_LIB\MY_LIB.DbLib`).
 
-## Состав
+## Files
 
-| Файл | Назначение |
+| File | Purpose |
 |---|---|
-| `hidden_session.py` | Win32-примитивы: `CreateDesktopW`, `CreateProcessW` + `STARTUPINFO.lpDesktop`, `EnumDesktopWindows`, `GetWindowThreadProcessId`, PID + время создания, Job Object |
-| `support.py` | журнал доказательств (`evidence.jsonl`), снимки процессов `X2.EXE`, снимки профиля Altium, DelphiScript-литералы |
-| `instances.py` | эталонный («рабочий») и скрытый экземпляры, ожидание готовности, отправка `-R`-скрипта, стабильный снимок окон |
-| `spice_flow.py` | production-поток DbLib → NSX → MixedSim → SDF, но с запуском в выбранном экземпляре |
-| `stage0_plumbing.py` | контроль Win32-plumbing на тестовом GUI-процессе без Altium |
-| `stage1_launch.py` | два экземпляра `X2.EXE`, окна только на скрытом Desktop |
-| `stage2_script.py` | адресная доставка DelphiScript: маршрут с рабочего и со скрытого Desktop |
-| `stage3_spice.py` | реальный SPICE-тест DbLib в скрытом Altium |
-| `stage4_lifecycle.py` | 3 × `START → READY → SCRIPT → SIMULATION → STOP` |
-| `probe_hidden_altium.py` | диагностика одиночного скрытого запуска |
-| `probe_shutdown.py` | диагностика штатного завершения |
-| `probe_profile.py` | измерение изменений в `%APPDATA%`/`%LOCALAPPDATA%` Altium |
-| `artifacts/` | машинные артефакты прогонов (в git не попадают) |
+| `hidden_session.py` | Win32 primitives: `CreateDesktopW`, `CreateProcessW` with `STARTUPINFO.lpDesktop`, `EnumDesktopWindows`, `GetWindowThreadProcessId`, PID + creation time, Job Objects |
+| `support.py` | Evidence log (`evidence.jsonl`), `X2.EXE` process snapshots, Altium profile snapshots, DelphiScript literals |
+| `instances.py` | Reference (working) and hidden instances, readiness checks, targeted `-R` scripts, stable window snapshots |
+| `spice_flow.py` | Production DbLib → NSX → MixedSim → SDF workflow executed on the selected instance |
+| `stage0_plumbing.py` | Win32 plumbing verification on a test GUI process without Altium |
+| `stage1_launch.py` | Two `X2.EXE` instances; hidden windows restricted to the hidden Desktop |
+| `stage2_script.py` | Targeted DelphiScript delivery from both working and hidden Desktops |
+| `stage3_spice.py` | Actual DbLib SPICE test in hidden Altium |
+| `stage4_lifecycle.py` | Three `START → READY → SCRIPT → SIMULATION → STOP` cycles |
+| `probe_hidden_altium.py` | Diagnostic probe of a single hidden startup |
+| `probe_shutdown.py` | Graceful shutdown diagnostics |
+| `probe_profile.py` | Checks modifications in Altium's `%APPDATA%`/`%LOCALAPPDATA%` |
+| `artifacts/` | Machine-readable evidence (not committed to Git) |
 
-## Воспроизведение
+## Reproducing the Experiment
 
-Все команды выполняются из каталога `experiments/hidden_altium`.
+Run every command from `experiments/hidden_altium`:
 
 ```powershell
-# 0. Проверка самих Win32-механизмов (Altium не нужен)
+# 0. Win32 plumbing (Altium not required)
 python stage0_plumbing.py
 
-# 1. Скрытый Desktop + второй X2.EXE
+# 1. Hidden Desktop and second X2.EXE
 python stage1_launch.py --timeout 240
 
-# 2. Адресный DelphiScript (сначала рабочий Desktop, затем скрытый)
+# 2. Targeted DelphiScript: working Desktop first, then hidden Desktop
 python stage2_script.py --timeout 180
 
-# 3. Реальный DbLib SPICE-тест в скрытом экземпляре
+# 3. Actual DbLib SPICE test in hidden instance
 python stage3_spice.py `
   --library "C:\Users\Nomatin\Documents\Altium\MY_LIB\MY_LIB\MY_LIB.DbLib" `
   --example "..\..\examples\dblib_resistor_r0009.json" `
   --timeout 300
 
-# 4. Жизненный цикл, три цикла
+# 4. Lifecycle: three cycles
 python stage4_lifecycle.py --cycles 3 --timeout 300
 
-# Диагностика (необязательно)
+# Optional diagnostics
 python probe_hidden_altium.py --seconds 120
 python probe_shutdown.py --wait 8
 python probe_profile.py --timeout 180
 ```
 
-### Что происходит с экземплярами Altium
+### Altium Instance Lifecycle
 
-- Если Altium уже запущен, скрипт берёт его как **эталонный** и только читает
-  его PID/время создания/окна. Такой экземпляр никогда не завершается
-  экспериментом.
-- Если Altium не запущен, эксперимент запускает эталонный экземпляр на обычном
-  рабочем столе (он виден пользователю) и завершает его в конце — это
-  собственный процесс эксперимента.
-- Скрытый экземпляр всегда создаётся экспериментом и живёт в Job Object с
-  `KILL_ON_JOB_CLOSE`.
-- `--no-start-reference` запрещает запуск эталонного экземпляра: тогда требуется
-  уже работающий Altium.
+- If Altium is already running, the experiment treats that process as the **reference instance** and only reads its PID, creation time, and windows. It never terminates that instance.
+- Otherwise, the experiment starts a visible reference instance on the normal Desktop and stops it at the end; this process belongs to the experiment.
+- The hidden instance is always created by the experiment and managed through a Job Object with `KILL_ON_JOB_CLOSE`.
+- `--no-start-reference` forbids starting a new reference instance; an already-running Altium is then required.
 
-Скрытый Desktop создаётся в `winsta0` с уникальным именем
-`SpiceSifterHidden-<id>`; `SwitchDesktop` не вызывается. В конце работы Desktop
-закрывается, процессы эксперимента завершаются.
+The hidden Desktop is created in `winsta0` under a unique `SpiceSifterHidden-<id>` name. `SwitchDesktop` is not called. On completion, the Desktop is closed and experiment-owned processes are terminated.
 
-## Результаты
+## Results and Artifacts
 
-Каждый прогон пишет `artifacts/<stage>_<timestamp>/`:
+Each stage writes `artifacts/<stage>_<timestamp>/` with:
 
-- `evidence.jsonl` — пошаговый журнал (PID, время создания, окна, маршрут
-  скрипта, NSX/SDF, диалоги, причины завершения);
-- `result.json` — итоговые проверки;
-- `altium_run/` или `cycleN/` — копии `status.txt`, `experiment.pas`, NSX, SDF.
+- `evidence.jsonl` — step-by-step evidence: PIDs, creation times, windows, script routing, NSX/SDF, dialogs, and termination reasons.
+- `result.json` — final checks.
+- `altium_run/` or `cycleN/` — copies of `status.txt`, `experiment.pas`, NSX, and SDF.
 
-Код возврата `0` — все проверки PASS, `1` — есть FAIL.
+Exit code 0 means all checks PASS; 1 indicates at least one FAIL.
 
-## Ограничения PoC
+## Proof-of-Concept Limitations
 
-- Штатное закрытие Altium 24.4 через `WM_CLOSE` упирается в модальный диалог
-  `Confirm Save Locally for (N) Modified Documents`; эксперимент фиксирует это и
-  завершает **только свой** процесс через Job Object после повторной проверки
-  PID + времени создания.
-- Каждый скрытый экземпляр занимает лицензионный слот; на этой машине две
-  одновременные сессии Altium были разрешены.
-- `-R` маршрутизируется по Desktop: скрипт исполняет тот экземпляр, чей Desktop
-  указан в `STARTUPINFO.lpDesktop`. Это и есть механизм адресации.
-- Эксперимент не использует production-lock и production-marker; его нельзя
-  запускать одновременно с обычным прогоном Spice Sifter.
-- Пользовательский профиль не изменяется по настройкам, но Altium дописывает
-  служебные логи в `%LOCALAPPDATA%\Altium` (см. `probe_profile.py`).
+- Graceful `WM_CLOSE` on Altium 24.4 triggers the `Confirm Save Locally for (N) Modified Documents` modal dialog. The experiment records it and terminates **only its own process** through its Job Object after rechecking PID and creation time.
+- Each hidden instance requires a license slot; two simultaneous Altium instances were permitted on the tested machine.
+- `-R` routing uses the Desktop. The command is executed by the instance whose Desktop is provided in `STARTUPINFO.lpDesktop`.
+- The experiment does **not** use production locks or pending-run markers. Do not run it concurrently with ordinary Spice Sifter sessions.
+- User profile configuration is not changed; Altium may append service logs in `%LOCALAPPDATA%\Altium` (see `probe_profile.py`).
