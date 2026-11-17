@@ -1,165 +1,132 @@
-# История изменений
+# Changelog
 
-## 0.7.1 — Hidden Altium control fixes
+## 0.7.1 — Hidden Altium Control Fixes
 
-- `hidden_instance.py`: создание и конфигурация Job Object проверяются; основной
-  процесс и `-R`-launcher'ы запускаются с `CREATE_SUSPENDED`, добавляются в Job
-  Object и только затем возобновляются. Ошибка присоединения завершает запуск с
-  `HIDDEN_LAUNCH_FAILED` и уничтожает только созданный процесс; `READY`
-  невозможен без управляемого Job Object.
-- `runtime_state.py`: batch-блокировка учитывает поток-владелец. Вложенный вход
-  разрешён только из него, другой поток получает `BUSY`/`MarkerError`.
-  Добавлены `current_state_root()` и `state_scope()` для единого каталога
-  состояния.
-- `spice_sifter.py`: одиночный hidden-запуск проверяет предыдущий сеанс
-  (`ACTIVE`/`UNKNOWN`/`CORRUPTED` — отказ, `STALE` — безопасная очистка);
-  ошибка остановки переводит итоговый отчёт в `ERROR` с сохранением `results[]`
-  и диагностики. `run_test_file(..., temp_dir=...)` использует единый
-  `state_root`.
-- `batch_agent.py`: пачка и все вложенные запуски используют один `state_root`;
-  ошибка остановки отражается в `altium_session_stop_error`.
-- Тесты: `tests/test_hidden_control.py` (22 точечных теста) и адаптация
-  затронутых существующих тестов. Полная регрессия не выполнялась.
+- `hidden_instance.py`: verify Job Object creation and configuration. The main process and `-R` launchers start with `CREATE_SUSPENDED`, join the Job Object, then resume. Assignment failure yields `HIDDEN_LAUNCH_FAILED` and terminates only the new process. An unmanaged process cannot become READY.
+- `runtime_state.py`: batch lock tracks its owning thread. Re-entry is allowed only from that thread; another thread gets BUSY / MarkerError. Added `current_state_root()` and `state_scope()` for consistent state storage.
+- `spice_sifter.py`: single hidden runs inspect prior session state (refuse ACTIVE/UNKNOWN/CORRUPTED; remove provably STALE entries). Stop failures change the final status to ERROR while preserving `results[]` and diagnostics. `run_test_file(..., temp_dir=...)` uses the shared state root.
+- `batch_agent.py`: batch and nested tests use the same state root. Stop failures appear under `altium_session_stop_error`.
+- Tests: 22 targeted cases in `tests/test_hidden_control.py` and updates to impacted tests. Full regression was not run.
 
-## 0.7.0 — Hidden Altium instance
+## 0.7.0 — Hidden Altium Instance
 
-- Добавлен `hidden_instance.py`: управляемый экземпляр Altium Designer на
-  отдельном невидимом Win32 Desktop (`CreateDesktopW`, `CreateProcessW` с
-  `STARTUPINFO.lpDesktop`, Job Object с `KILL_ON_JOB_CLOSE`). Идентичность
-  процесса — PID + время создания; `WM_CLOSE`, `SwitchDesktop`, `SendInput` и
-  `taskkill` не используются.
-- `--altium-instance {current,hidden}` для одиночного запуска, `doctor` и
-  `batch_agent.py`. По умолчанию — `current`, прежнее поведение не изменено.
-- Все команды `-R`, включая дополнительный `collect.pas`, направляются через
-  launcher: в hidden-режиме они создаются на скрытом Desktop, в current —
-  прежним `subprocess.Popen`.
-- `batch_agent.run_batch(..., altium_instance="hidden")`: один экземпляр на
-  пачку, `START → READY → Test 1..N → STOP`, завершение в `finally`, свежий
-  экземпляр при следующем вызове. Системные ошибки `HIDDEN_*` останавливают
-  серию с `NOT_RUN`, уже полученные отчёты сохраняются.
-- Блокировка: пачка удерживает существующий `altium.lock` на всю серию;
-  вложенный запуск скрипта в том же процессе не блокируется повторно,
-  независимый запуск Spice Sifter — блокируется.
-- `runtime_state.py`: запись скрытого сеанса, проверка PID + времени создания,
-  `doctor` для hidden-режима (без требования запущенного Altium), безопасный
-  `recover` для устаревшей записи сеанса. Новые поля диагностики не удаляют
-  существующие.
-- Отчёт: необязательное поле `altium_session` (Desktop, PID, время создания,
-  READY, команды, причина завершения); контракт `results[]`/`coverage` не
-  изменён.
-- Добавлены unit-тесты `tests/test_hidden.py` (27 тестов) и исправлен
-  существующий фикстур `test_filter_graphs_no_checks_and_fail`, который нарушал
-  контракт отчёта (FAIL без числового `value`).
+- Added `hidden_instance.py` to manage Altium on a separate invisible Win32 Desktop (`CreateDesktopW`, `CreateProcessW` with `STARTUPINFO.lpDesktop`, and a `KILL_ON_JOB_CLOSE` Job Object). Identity is PID + creation time; no `WM_CLOSE`, `SwitchDesktop`, `SendInput`, or `taskkill`.
+- Added `--altium-instance {current,hidden}` to single-run, doctor, and batch-agent interfaces. Default `current` preserves previous behavior.
+- All `-R` commands, including `collect.pas`, are routed through a launcher. Hidden mode creates launchers on the hidden Desktop; current mode continues using `subprocess.Popen`.
+- Added `run_batch(..., altium_instance="hidden")`: a fresh instance per batch, `START → READY → Test 1..N → STOP`, cleanup in `finally`. Systemic `HIDDEN_*` failures stop the series and mark unstarted tests NOT_RUN without discarding completed reports.
+- The batch holds the existing `altium.lock` throughout; nested calls within the owning process avoid re-locking while independent Spice Sifter runs are blocked.
+- `runtime_state.py` records sessions, validates PID + creation time, supports hidden doctor without an already-open Altium, and safely recovers stale session records. Existing diagnostic fields remain.
+- Optional report `altium_session` records Desktop, PID, creation/READY times, commands, and termination reason, without changing `results[]`/`coverage`.
+- Added 27 unit tests in `tests/test_hidden.py`; fixed `test_filter_graphs_no_checks_and_fail`, which violated the report contract by reporting FAIL without a numeric value.
 
-## 0.6.3 — JSON-safe report finalization
+## 0.6.3 — JSON-safe Report Finalization
 
-- `report_model.finalize_report()` теперь рекурсивно очищает весь отчёт перед возвратом: `results[]`, `checks[]`, `measurements[]`, `runs[]`, `coverage`, `summary`, `graphs`, `diagnostics`, `error` и произвольные вложенные словари/массивы.
-- `NaN`, `Infinity` и `-Infinity` заменяются на `null`; конечные числа, включая `0` и отрицательные, сохраняются. Строки и boolean не преобразуются.
-- Проверка `_validated_result_value()` по-прежнему выполняется до очистки, поэтому `RESULT_VALUE_MISSING` и `RESULT_VALUE_INVALID` классифицируются корректно. Повторная финализация идемпотентна и не меняет диагностический код.
-- Неподдерживаемые JSON типы не превращаются в строки: значение заменяется на `null`, отчёт получает `REPORT_SERIALIZATION_INVALID` и статус `ERROR`, но остаётся сериализуемым.
-- Добавлены локальные тесты полной сериализации `json.dumps(report, allow_nan=False)`. Altium, MixedSim и полная регрессия не запускались.
+- `report_model.finalize_report()` now recursively sanitizes all report fields: `results[]`, `checks[]`, `measurements[]`, `runs[]`, `coverage`, `summary`, `graphs`, `diagnostics`, `error`, and arbitrary nested objects/arrays.
+- NaN and ±Infinity become null; finite values, including zero and negatives, remain unchanged. Strings and booleans are not coerced.
+- `_validated_result_value()` still runs **before** sanitization so RESULT_VALUE_MISSING/RESULT_VALUE_INVALID remain correctly distinguished. Re-finalization is idempotent and preserves the diagnostic code.
+- Unsupported JSON types become null (not strings), and the report becomes serializable with `REPORT_SERIALIZATION_INVALID` / ERROR.
+- Added local `json.dumps(report, allow_nan=False)` tests. Altium/MixedSim/full regression were not run.
 
-## 0.6.2 — Value classification and strict batch contract
+## 0.6.2 — Value Classification and Strict Batch Contract
 
-- `report_model.py` различает отсутствующее/`null` значение (`RESULT_VALUE_MISSING`) и присутствующее недопустимое значение — `NaN`, `Infinity`, `-Infinity`, строка, boolean (`RESULT_VALUE_INVALID`). Исходное значение проверяется до нормализации; `NaN`/`Infinity` не попадают в финальный JSON, корректные числа (включая `0`) сохраняются.
-- `batch_agent.validate_report_contract()` проверяет полный опубликованный контракт: `validation_status`, обязательные поля результатов, `kind`, `id`, `unit`, согласованность `error` со статусом, `value = null` для `NOT_RUN`, неотрицательные счётчики, инварианты coverage, отсутствие противоречий `PASS`/`FAIL` и точное соответствие счётчиков фактическим статусам.
-- Структурные нарушения и противоречия статусов дают `REPORT_CONTRACT_INVALID`; потеря результатов и неполный coverage — `REPORT_INCOMPLETE`.
-- Добавлены локальные unit-тесты для всех перечисленных случаев. Altium, MixedSim и полная регрессия не запускались.
+- `report_model.py` distinguishes missing/null results (`RESULT_VALUE_MISSING`) from invalid present values (NaN/±Infinity/string/boolean, `RESULT_VALUE_INVALID`). Raw values are validated before normalization, nonfinite numbers are excluded from JSON, and valid numbers including zero are preserved.
+- `batch_agent.validate_report_contract()` validates `validation_status`, required result fields, kind/id/unit, errors relative to status, null values for NOT_RUN, nonnegative coverage counters, coverage invariants, PASS/FAIL consistency, and exact correspondence between status counts and results.
+- Structural contradictions yield `REPORT_CONTRACT_INVALID`; lost results/incomplete coverage yield `REPORT_INCOMPLETE`.
+- Added corresponding local tests. Altium/MixedSim/full regression were not run.
 
-## 0.6.1 — Review fixes
+## 0.6.1 — Review Fixes
 
-- Пакетный агрегатор `batch_agent.run_batch()` больше не доверяет полю `status`: перед принятием проверяются `schema_version`, `results[]`, `coverage`, уникальность `result_id`, счётчики и отсутствие `ERROR`/`NOT_RUN` при заявленном `PASS`. Неполный отчёт даёт `REPORT_INCOMPLETE`, структурное нарушение — `REPORT_CONTRACT_INVALID`; оригинальный отчёт сохраняется в диагностике.
-- Нормализатор `report_model.py` запрещает `PASS`/`FAIL`/`MEASURED` без конечного числового `value`. `null`, `NaN`, `Infinity`, строка и boolean переводят результат в `ERROR` с `RESULT_VALUE_INVALID`/`RESULT_VALUE_MISSING`, после чего итоговый статус пересчитывается.
-- Старые `pending-run.txt` с одним путём теперь проверяют все процессы `X2.EXE`: при достоверном отсутствии Altium маркер безопасно удаляется, при запущенном или неизвестном состоянии — сохраняется. Добавлен `recover --confirm-legacy-stopped`, который не обходит проверку процессов.
-- `doctor` больше не считает `responding = null` признаком готовности. `READY` требует Altium 24.4.x и `responding = true`; неизвестная/неподдерживаемая версия, ошибка запроса процессов и несколько неоднозначных экземпляров не дают `READY`.
-- Добавлены локальные unit-тесты для всех перечисленных случаев. Полные acceptance-тесты и реальное моделирование Altium в рамках этого исправления не запускались.
+- `batch_agent.run_batch()` validates schema_version, results, coverage, unique result_id, counters, and status integrity before accepting reports. Incomplete reports yield REPORT_INCOMPLETE; structural violations yield REPORT_CONTRACT_INVALID; original reports are preserved in diagnostics.
+- The normalizer prohibits PASS/FAIL/MEASURED without a finite numeric value. Null, NaN, Infinity, strings, and booleans become ERROR with RESULT_VALUE_INVALID/RESULT_VALUE_MISSING, followed by final status recomputation.
+- Legacy path-only pending markers now check **all** X2.EXE processes. Markers are removed only when Altium is verifiably absent; `recover --confirm-legacy-stopped` does not bypass process checks.
+- `doctor` no longer treats `responding = null` as READY. Altium 24.4.x and `responding = true` are required; unsupported/unknown versions, process-query errors, and ambiguous instances cannot pass.
+- Added targeted unit tests. No full acceptance suite or live Altium simulation was run for these fixes.
 
-## 0.6 — Reliable Execution & Report Contract
+## 0.6 — Reliable Execution and Report Contract
 
-- Добавлен `schema_version: "1.0"` во все отчёты.
-- Добавлена единая коллекция `results[]` для Standalone SPICE, DbLib Component, Temperature Testing, Parameter Sweep, Automatic Measurements и частично выполненных/ошибочных испытаний.
-- Добавлен раздел `coverage` с инвариантами `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`.
-- Планировщик ожидаемых результатов учитывает `checks`, `measurements`, `temperatures_c`, `sweep.parameters`, фильтры `when` и `temperature_c`. Семейные sweep-измерения дают один результат на температурную группу и имеют `scope: "sweep"` + `run_ids`.
-- Потерянный или невыполненный результат даёт `ERROR / REPORT_INCOMPLETE`, дубликат `result_id` — диагностическую ошибку. Ложный `PASS` исключён.
-- Добавлены статусы `MEASURED` и `NOT_RUN`; при отсутствии допусков возвращается `validation_status: "NO_ASSERTIONS"`.
-- `pending-run.txt` заменён на атомарный структурированный JSON-маркер (run_id, run_dir, PID и время создания Altium, runner_pid, started_at, timeout_at, state). Старый формат с путём поддерживается.
-- Добавлено безопасное самовосстановление: маркер удаляется только при доказанном завершении запуска или процесса Altium; активная/неопределённая симуляция не прерывается. Возраст маркера не является основанием для удаления.
-- Добавлены команды `python spice_sifter.py doctor [--json]` и `python spice_sifter.py recover`; прежний CLI не изменён.
-- Добавлена эталонная интеграция пакетного агента `batch_agent.py`: один preflight, остановка серии при системной ошибке, `NOT_RUN` для незапущенных испытаний.
-- Устранены гонки чтения `collect.tmp`/`status.txt`: временная блокировка файла и `SAVE_PENDING` с готовым `collect.tmp` больше не приводят к ложному тайм-ауту.
-- Добавлены `schemas/report.schema.json`, `report_model.py`, `runtime_state.py`, автотесты контракта, pending-run, doctor/recover и batch preflight.
-- Документация: [REPORT_CONTRACT.md](wiki/REPORT_CONTRACT.md), [AGENT_INTEGRATION.md](wiki/AGENT_INTEGRATION.md), обновлены README, User-Guide, DEVELOPMENT и Home.
+- Added `schema_version: "1.0"` to reports and unified `results[]` for standalone, DbLib, Temperature, Sweep, Measurements, and partial/failed runs.
+- Added coverage invariants: `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`.
+- Result planning considers checks, measurements, temperatures_c, sweep.parameters, when, and temperature_c. Sweep-family measurements produce one result per temperature group with `scope: "sweep"` and `run_ids`.
+- Missing/unexecuted results yield ERROR / REPORT_INCOMPLETE; duplicate result_id produces a diagnostic error, preventing false PASS.
+- Added MEASURED/NOT_RUN statuses and `validation_status: "NO_ASSERTIONS"` when no tolerance assertions exist.
+- Replaced `pending-run.txt` with an atomically written structured JSON marker (run_id, run_dir, Altium PID + creation time, runner_pid, started_at, timeout_at, state); legacy path-only format remains supported.
+- Added safe recovery only when previous run/process termination is proven; active/uncertain simulations are never interrupted and marker age is not grounds for deletion.
+- Added `doctor [--json]` and `recover` commands without changing existing CLI invocation.
+- Added reference `batch_agent.py`: shared preflight, stop-on-system-error, and NOT_RUN for unstarted tests.
+- Fixed `collect.tmp`/`status.txt` read races; transient file locks and SAVE_PENDING with a completed collect.tmp no longer cause false timeouts.
+- Added report schema, report_model.py, runtime_state.py, and tests for contract, pending runs, doctor/recover, and batch preflight.
+- Documentation: [Report Contract](wiki/REPORT_CONTRACT.md), [Agent Integration](wiki/AGENT_INTEGRATION.md), updated README, User Guide, Development, and Home.
 
-Проверка на Altium Designer 24.4.1.13: 174 автотеста, Standalone 7/7, Parameter Sweep 11/11, Temperature 9/9, Automatic Measurements 7/7, AC 11/11, DbLib 13/13, multipin DbLib — все доступные кейсы OK (BJT ожидаемо `BLOCKED`). 65 реальных отчётов v1.0 прошли JSON Schema и проверку инвариантов coverage.
+Verification on Altium Designer 24.4.1.13: 174 automated tests, Standalone 7/7, Sweep 11/11, Temperature 9/9, Measurements 7/7, AC 11/11, DbLib 13/13, and all available multi-pin DbLib cases passed (BJT expected BLOCKED). All 65 actual v1.0 JSON reports passed schema and coverage invariants.
 
-## Невыпущенные изменения
+## Previously Unreleased Changes
 
-- Добавлен режим **DbLib Component**: компонент из установленной DbLib автоматически размещается на подготовленном SchDoc, подключается Wire/Net Label, компилируется, Altium формирует NSX, MixedSim создаёт SDF, а результат проходит через существующие Validator/Measurements/Graph Export.
-- Добавлены `dblib_runner.py`, ресурсы `dblib_resources/` (шаблон проекта и DelphiScript), примеры `examples/dblib_*`, автономные тесты и реальная приёмка `tests/acceptance_dblib.py`.
-- Очистка схемы использует журнал созданных объектов и выполняется при PASS/FAIL/ERROR; документы Altium не закрываются. Рабочие файлы остаются в `temp/dblib_runs/<run_id>/`.
-- Ужесточена проверка DbLib: `component.library` принимает только полный абсолютный путь к существующему `.DbLib`; поиск по имени удалён.
-- Очистка считается успешной только после фактического удаления объектов и успешного сохранения SchDoc; ошибки дают `STATUS=ERROR` и не маскируют исходную причину.
-- Дублирующиеся графики SDF сравниваются полностью по X/Y, единицам и комплексным значениям; различающиеся данные дают `SDF_DUPLICATE_CONFLICT`.
-- Приёмочные входы и отчёты перенесены в `temp/dblib_acceptance/<acceptance_id>/`; путь к библиотеке задаётся через `SPICE_SIFTER_DBLIB_PATH`.
-- Добавлена лицензия GNU GPL-3.0-only: файл `LICENSE`, SPDX-заголовки в собственных Python-файлах и раздел «License / Лицензия» в README.
-- Исправлен расчёт RMS: вместо трапеций по квадратам отсчётов используется точное аналитическое интегрирование квадрата кусочно-линейно интерполированного сигнала. Добавлены математические тесты RMS.
-- DbLib Component расширен на многовыводные компоненты: `component.spice` + `component.pins` + `{{DUT}}`, динамическое чтение выводов, произвольные designators и `null` для явно неподключённых выводов.
-- Добавлен минимальный генератор SchDoc из `spice` для V/I/R/C/L и одна директива `.OP`/`.AC`/`.TRAN`; `dblib_resources/template_empty` и `dblib_resources/dblib_fixture.pas`.
-- Добавлены проверки: `COMPONENT_NOT_FOUND`, `COMPONENT_NO_PINS`, `COMPONENT_PIN_NOT_FOUND`, `COMPONENT_PIN_AMBIGUOUS`, `COMPONENT_PIN_UNASSIGNED`, `COMPONENT_PIN_CONNECTION_FAILED`, `COMPONENT_NETLIST_MISMATCH`, `COMPONENT_SIM_MODEL_MISSING`, `COMPONENT_SIM_PORT_MAP_INVALID`, `MULTIPART_UNSUPPORTED`.
-- Pin Mapping проверяется по реальному Sim Port Map и порядку узлов в Altium NSX, а не по порядку перечисления выводов.
-- Добавлена multi-pin приёмка `tests/acceptance_dblib_multipin.py` (3-выводный MOSFET, 6-выводная ИС, null/shared/bad/missing pin, unsupported spice). BJT — `BLOCKED`: в библиотеке нет BJT.
-- Ограничения: `.DC` в проектом режиме отклоняется как `FIXTURE_ANALYSIS_UNSUPPORTED`; AC impedance требует токовых probe; многосекционные УГО отклоняются.
+- Added DbLib Component mode: load a database component, place on a prepared SchDoc with wires/net labels, compile, generate NSX, run MixedSim to SDF, then reuse Validator/Measurements/Graph Export.
+- Added `dblib_runner.py`, `dblib_resources/` templates/DelphiScript, `examples/dblib_*`, standalone tests, and live `tests/acceptance_dblib.py`.
+- Added run-object journaling and cleanup on PASS/FAIL/ERROR, without closing Altium documents. Run artifacts remain under `temp/dblib_runs/<run_id>/`.
+- Enforced an absolute existing `.DbLib` path in `component.library`, removing name-only discovery.
+- Cleanup now succeeds only when generated objects are removed and the cleaned SchDoc saves successfully; otherwise STATUS=ERROR retains the original cause.
+- Duplicate SDF graphs are compared across full X/Y arrays, units, and complex values; conflicting duplicates produce SDF_DUPLICATE_CONFLICT.
+- Moved acceptance inputs/results under `temp/dblib_acceptance/<acceptance_id>/` and added `SPICE_SIFTER_DBLIB_PATH`.
+- Added GNU GPL-3.0-only LICENSE, SPDX headers, and README license section.
+- Corrected RMS from trapezoids of squared samples to exact integration of the squared piecewise-linear interpolation; added mathematical tests.
+- Extended DbLib to multi-pin components with `component.spice`, `component.pins`, `{{DUT}}`, dynamic pin discovery, arbitrary designators, and explicit null for unconnected pins.
+- Added a minimal SchDoc fixture generator for V/I/R/C/L and one .OP/.AC/.TRAN directive, plus `template_empty` and `dblib_fixture.pas`.
+- Added component and pin errors: COMPONENT_NOT_FOUND, COMPONENT_NO_PINS, COMPONENT_PIN_NOT_FOUND, COMPONENT_PIN_AMBIGUOUS, COMPONENT_PIN_UNASSIGNED, COMPONENT_PIN_CONNECTION_FAILED, COMPONENT_NETLIST_MISMATCH, COMPONENT_SIM_MODEL_MISSING, COMPONENT_SIM_PORT_MAP_INVALID, MULTIPART_UNSUPPORTED.
+- Pin Mapping uses the real Sim Port Map and Altium NSX node order, not the order of pins in JSON.
+- Added `tests/acceptance_dblib_multipin.py` covering 3-pin MOSFET, 6-pin IC, null/shared/bad/missing pin, and unsupported SPICE. BJT BLOCKED due to missing BJT in library.
+- Project-mode .DC is rejected as FIXTURE_ANALYSIS_UNSUPPORTED; AC impedance needs current probes; multipart symbols are rejected.
 
-## Переименование проекта
+## Project Rename
 
-- Проект переименован в Spice Sifter: `dbur_test.py` → `spice_sifter.py`, `DBUR_ALTIUM` → `SPICE_SIFTER_ALTIUM`, `%TEMP%/DBUR-Test` → `%TEMP%/SpiceSifter`.
-- Функциональность версии 0.5 не изменена; обновлены документация, примеры и тесты.
+- Renamed DBUR-Test to Spice Sifter: `dbur_test.py` → `spice_sifter.py`, `DBUR_ALTIUM` → `SPICE_SIFTER_ALTIUM`, `%TEMP%/DBUR-Test` → `%TEMP%/SpiceSifter`.
+- No changes to version 0.5 functionality; updated documentation, examples, and tests.
 
 ## 0.5 — Automatic Measurements
 
-- Добавлен Measurement Engine над полными данными SDF, без повторного моделирования ради каждого измерения.
-- Добавлены реальные оконные операции, фронты, задержка, установление, AC-срез, минимум импеданса, эквивалентные C/L/ESR.
-- Добавлены sweep_crossing для VGS(th), статический rds_on, when/temperature_c и раздельные температурные семейства.
-- Допуски используют прежний Validator; результаты различают MEASURED/PASS/FAIL/ERROR и поддерживают диагностические markers.
-- Добавлены примеры, математические тесты, реальные SDF и приёмочный сценарий. Подробности — [Wiki: измерения](wiki/MEASUREMENT_VERIFICATION.md).
+- Added Measurement Engine on full SDF data without rerunning simulations for individual measurements.
+- Added windowed statistics, edges, delays, settling, AC cutoff, minimum impedance, and equivalent C/L/ESR.
+- Added sweep_crossing for VGS(th), static rds_on, when/temperature_c, and separate temperature families.
+- Reused existing Validator for limits; results distinguish MEASURED/PASS/FAIL/ERROR and support diagnostic markers.
+- Added examples, mathematical tests, real SDF fixtures, and acceptance scripts. See [Measurement Verification](wiki/MEASUREMENT_VERIFICATION.md).
 
-Проверка: 79 автотестов, 7 новых реальных измерительных сценариев и 38 прежних сценариев регрессии на Altium Designer 24.4.1.13.
+Verified: 79 unit tests, 7 new live measurement scenarios and 38 previous regression cases on Altium Designer 24.4.1.13.
 
 ## 0.4 — Parameter Sweep
 
-- Добавлены values, Decimal start/stop/step и декартово произведение параметров с температурами.
-- Добавлены безопасные числовые плейсхолдеры {{NAME}}, фильтры when и лимит --max-runs (по умолчанию 100).
-- Добавлены метаданные parameters/run_id, независимые проверки и экспорт графиков каждой комбинации.
-- После тайм-аута или потери отзывчивого Altium дальнейшие комбинации не запускаются; результаты сохраняются.
-- Подтверждён самостоятельный OP с .PLOT OP; добавлены analysis=op, пример и реальный SDF.
-- Автоматическое закрытие документов не добавлялось.
+- Added explicit values, Decimal start/stop/step, and Cartesian parameter/temperature products.
+- Added safe numeric `{{NAME}}` placeholders, when filters, and `--max-runs` (default 100).
+- Added parameters/run_id metadata, independent checks, and graph exports per combination.
+- Aborted remaining combinations on timeout or unresponsive/lost Altium while retaining completed reports.
+- Verified standalone OP with .PLOT OP; added analysis=op, example, and real SDF.
+- Did not introduce automatic closing of documents.
 
-Проверка: 58 автотестов, 11 приёмочных сценариев Parameter Sweep и 27 прежних сценариев регрессии. Подробности — в [SWEEP_VERIFICATION.md](wiki/SWEEP_VERIFICATION.md).
+Verified: 58 unit tests, 11 live Sweep cases, 27 prior regression cases. See [Sweep Verification](wiki/SWEEP_VERIFICATION.md).
 
 ## 0.3 — Temperature Testing
 
-- Добавлены одиночная `.TEMP` и последовательные независимые серии `temperatures_c`.
-- Применение температуры подтверждено в MixedSim 24.4 через `.OPTIONS TEMP`; входная `.TEMP` преобразуется в рабочем NSX.
-- Добавлены привязка проверок к температуре, фильтры графиков, run_id и агрегированные runs/summary.
-- Разделены успешность моделирования и состояние проверок; разрешён сбор температурных графиков без проверок.
-- Ошибки одной температуры сохраняются отдельно; исходная диагностика не заменяется общим сообщением.
-- Добавлены примеры, реальные температурные SDF, 12 новых автономных тестов и приёмочный сценарий температурных испытаний.
+- Added single .TEMP and independent sequential `temperatures_c` series.
+- Verified temperature control via .OPTIONS TEMP in MixedSim 24.4; input .TEMP is converted in working NSX.
+- Added temperature-scoped checks, graph filters, run_id and aggregate runs/summary.
+- Separated simulation success from checks status; allowed collecting temperature graphs without assertions.
+- Kept per-temperature errors and original diagnostics intact.
+- Added examples, real temperature SDF fixtures, 12 new unit tests, and live acceptance.
 
-Подтверждены 43 автономных теста и 9 реальных температурных сценариев на AD24.4.1.13. Подробности — в [TEMPERATURE_VERIFICATION.md](wiki/TEMPERATURE_VERIFICATION.md).
+Verified: 43 unit tests, 9 real temperature scenarios on AD24.4.1.13. See [Temperature Verification](wiki/TEMPERATURE_VERIFICATION.md).
 
-## 0.2 — AC Analysis & Graph Export
+## 0.2 — AC Analysis and Graph Export
 
-- Добавлены AC DEC/OCT/LIN и чтение комплексных SDF из Altium 24.4.
-- Добавлены проверки Re(Z), Im(Z), |Z|, явное направление тока и порог min_current_a.
-- Добавлены выбор точной частоты и интерполяция комплексных V/I без экстраполяции.
-- Добавлен output.graphs для сигналов Transient/DC/AC и импеданса: полные массивы или выборка с сохранением крайних точек.
-- Добавлены обычные DC-проверки, AC-примеры, реальный SDF-образец, автоматические тесты и приёмочный сценарий.
-- Сохранены CLI, старый формат проверок, статусы и коды завершения.
+- Added AC DEC/OCT/LIN and complex SDF parsing from Altium 24.4.
+- Added Re(Z), Im(Z), |Z| checks, explicit current polarity, and min_current_a.
+- Added exact frequency selection and complex V/I interpolation without extrapolation.
+- Added output.graphs for transient/DC/AC signals and impedance with full or endpoint-preserving decimated arrays.
+- Added ordinary DC checks, AC examples, real SDF fixture, automated tests, and acceptance cases.
+- Preserved CLI, legacy checks, statuses, and exit codes.
 
-Проверка: 31 автономный тест, 11 реальных AC-сценариев и 7 реальных сценариев регрессии на Altium Designer 24.4.1.13. Подробности — в [AC_VERIFICATION.md](wiki/AC_VERIFICATION.md).
+Verified: 31 unit tests, 11 live AC scenarios, and 7 live regression scenarios on Altium Designer 24.4.1.13. See [AC Verification](wiki/AC_VERIFICATION.md).
 
 ## 0.1 — MVP
 
-- Реализованы подготовка NSX, временный DelphiScript, запуск MixedSim и собственный SDF-парсер.
-- Добавлены измерения first/last/min/max, JSON-отчёт, тайм-аут, изоляция запусков и проверка открытого Altium.
-- Добавлены примеры делителя и диода с внешней моделью.
+- Implemented NSX preparation, temporary DelphiScript, MixedSim execution, and custom SDF parser.
+- Added first/last/min/max measurements, JSON report, timeout, run isolation, and a check for running Altium.
+- Added examples for a voltage divider and a diode with an external model.
