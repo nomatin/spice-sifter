@@ -1,54 +1,54 @@
 # Spice Sifter 0.4 — Parameter Sweep
 
-## Реализация
+## Implementation
 
-Расширен прежний планировщик независимых запусков. Sweep задаёт только числовые подстановки основного SPICE; Runner, сохранение SDF, комплексный парсер и математические проверки не заменялись. Внешние модели не редактируются, документы Altium автоматически не закрываются.
+The existing independent-run scheduler was extended. Sweeps only substitute numeric values into the main SPICE text; the runner, SDF export, complex parser, and numerical validators were not replaced. External models are not modified and Altium documents are not closed automatically.
 
-Сетки values сохраняют входной порядок; linear строится из Decimal как start+i·step. Полное число комбинаций с температурами проверяется до обращения к Altium; по умолчанию не больше 100 запусков Sweep. Затем до первого запуска проверяется каждая подготовленная схема. Дубликаты и значения, неразличимые в представлении SPICE float, отклоняются.
+`values` grids preserve input order; `linear` grids are built with Decimal using `start+i·step`. The total number of parameter/temperature combinations is validated before invoking Altium; the default sweep limit is 100 runs. Every prepared circuit is then validated before the first run. Duplicate values and values indistinguishable in SPICE float representation are rejected.
 
-Порядок: температура, первый параметр, остальные параметры (последний меняется быстрее). when сопоставляется с индексами исходной сетки; точное Decimal-совпадение имеет приоритет. При отличии представления float допускается единственный близкий кандидат, неоднозначность отклоняется.
+The iteration order is temperature, first parameter, remaining parameters (the last changes fastest). `when` conditions match original grid indices; exact Decimal matches take precedence. For float representation differences, one uniquely close candidate is allowed; ambiguous matches are rejected.
 
-Каждый запуск имеет параметры и уникальный run_id. Метаданные графиков дублируют метаданные запуска. При моделировании без применимых проверок checks_count=0 и checks_status=NOT_CONFIGURED. После обычной ошибки серия продолжается; TIMEOUT, SCRIPT_NOT_EXECUTED, BUSY и потеря доступного процесса прекращают новые запуски. Возвращаются уже полученные результаты и число not_run.
+Each run has parameters and a unique `run_id`. Graph metadata mirror run metadata. Runs with no applicable checks report `checks_count=0` and `checks_status=NOT_CONFIGURED`. Ordinary failures do not stop the series; `TIMEOUT`, `SCRIPT_NOT_EXECUTED`, `BUSY`, and loss of the accessible process stop subsequent runs. Completed results and the `not_run` count are returned.
 
-## Реальная проверка
+## Live Verification
 
-Среда: Windows, Python 3.14.5, Altium Designer 24.4.1.13; 30 октября 2026 года.
+**Environment:** Windows, Python 3.14.5, Altium Designer 24.4.1.13; October 30, 2026.
 
-| Сценарий | Результат |
+| Scenario | Result |
 |---|---|
-| VIN от 0 до 5, шаг 1 | 6 независимых запусков; V(out)=VIN/2 |
-| VIN=[2,5,10], RLOAD=[1000,2000] | 6 запусков в заданном порядке; значения сверены с формулой делителя |
-| when по двум параметрам | Одна проверка при VIN=5/RLOAD=1000, остальные checks_count=0 |
-| График when VIN=5 | Только два графика, по 200 точек, правильные run_id/parameters |
-| 3 температуры × 2 VIN | 6 запусков; температура — внешний цикл, графики только при VIN=5 и T=-40/+85 |
-| AC R=[100,1000] | Re(Z), Im(Z), модуль совпали с номиналами |
-| Переходный процесс RC | Две постоянные времени; конечное напряжение совпало с 1−exp(−t/RC) |
-| Ошибка модели во второй комбинации | PASS / ERROR / PASS; первый и третий результаты сохранены |
-| FAIL с графиками | FAIL; запрошенные графики возвращены |
-| Превышение лимита и неизвестный placeholder | INPUT_INVALID до моделирования |
-| DC с VMAX=[2,4] | PASS, конечные V(out)=1/2 В, графики с осью V и метаданными параметров |
-| OP с VIN=[2,5] | PASS, V(out)=1.0/2.5 В; получены отдельные реальные SDF |
+| VIN 0 through 5, step 1 | Six independent runs; V(out)=VIN/2 |
+| VIN=[2,5,10], RLOAD=[1000,2000] | Six runs in the specified order; matched divider equation |
+| `when` on two parameters | One check at VIN=5/RLOAD=1000; other runs have checks_count=0 |
+| Graph when VIN=5 | Only two graphs, 200 points each; correct run_id/parameters |
+| Three temperatures × two VIN values | Six runs, temperature outermost; graphs only at VIN=5 and T=−40/+85 |
+| AC R=[100,1000] | Re(Z), Im(Z), and magnitude match nominal values |
+| RC transient | Two time constants; final voltage matches 1−exp(−t/RC) |
+| Faulty model in the second combination | PASS / ERROR / PASS; first and third results retained |
+| FAIL with graphs | FAIL; requested graphs returned |
+| Run limit exceeded / unknown placeholder | INPUT_INVALID before simulation |
+| DC with VMAX=[2,4] | PASS, final V(out)=1/2 V; graphs with V axis and parameter metadata |
+| OP with VIN=[2,5] | PASS, V(out)=1.0/2.5 V; separate real SDFs obtained |
 
-Приёмка Sweep: **11/11 сценариев**, 35 реальных независимых симуляции плюс две ошибки входа без обращения к Altium. Локальный отчёт tests/sweep_acceptance_report.json исключён из Git; повторить — `python tests/acceptance_sweep.py` при открытом Altium.
+Sweep acceptance: **11/11** scenarios, 35 actual independent simulations and two input errors detected without Altium. The local report, `tests/sweep_acceptance_report.json`, is excluded from Git. Reproduce with `python tests/acceptance_sweep.py` while Altium is open.
 
 ## Operating Point
 
-В предыдущих версиях OP не заявлялся. В 0.4 отдельно проверены `.OP` и `.PLOT OP V(out)`: без явной PLOT OP самостоятельная схема не создавала SDF. Рабочий пример — examples/sweep_op.json. В проверке указывается analysis=op; существующие проверки без analysis по-прежнему используют Transient. Реальный SDF включён в tests/fixtures/op_ad24_4.sdf. У OP-графиков X безразмерный (x_unit=1).
+OP was not claimed in earlier versions. Version 0.4 separately verified `.OP` and `.PLOT OP V(out)`. A standalone `.OP` circuit without explicit PLOT OP did not generate SDF. Working example: `examples/sweep_op.json`. Checks use `analysis=op`; existing checks without `analysis` still use transient. A real SDF is included as `tests/fixtures/op_ad24_4.sdf`. The X axis of OP graphs is dimensionless (`x_unit=1`).
 
-## Автоматические проверки
+## Automated Tests
 
-58 тестов: прежние 43 и 15 тестов Sweep/OP/отзывчивости процесса. Проверяются Decimal-сетки в обе стороны, непопадающий конец, одиночная точка, пустые/неправильные диапазоны, дубликаты, регистр имён, подстановка, неиспользуемые и неизвестные параметры, when и float-погрешности, ограничение до запуска, увеличение лимита, порядок температур/параметров, метаданные и фильтры графиков, продолжение после ошибки и остановка после тайм-аута. OP проверен также по реальному SDF.
+**58 tests:** 43 prior tests and 15 Sweep/OP/process-responsiveness tests. Covered cases include Decimal grids in both directions, excluded endpoints, single points, empty/invalid ranges, duplicates, parameter-name case handling, substitution, unused and unknown parameters, `when` and float tolerances, preflight run limits, increased limits, temperature/parameter order, graph metadata and filters, continuing after a failure, and stopping on timeouts. OP was also verified with an actual SDF.
 
-Автотест остановки после тайм-аута подменяет Runner: Altium намеренно не подвешивался. Обычная ошибка отдельной модели проверена реальным MixedSim.
+The timeout stop test mocks the runner; Altium was not deliberately hung. An individual model failure was verified with real MixedSim.
 
-## Регрессия
+## Regression
 
-Без изменения прежних JSON выполнены tests/acceptance.py — **7/7**, tests/acceptance_ac.py — **11/11**, tests/acceptance_temperature.py — **9/9**. Все три набора завершились кодом 0. Включены обычные модели, отсутствие сигналов, ошибочные допуски, модель с ошибкой, повторные запуски, кириллические пути, AC-интерполяция, температурные серии и графики.
+The original JSON files were unchanged. `tests/acceptance.py` passed **7/7**, `tests/acceptance_ac.py` passed **11/11**, and `tests/acceptance_temperature.py` passed **9/9**. All suites exited with code 0. They cover ordinary models, missing signals, invalid limits, faulty models, repeated runs, Cyrillic paths, AC interpolation, temperature series, and graphs.
 
-## Ограничения
+## Limitations
 
-- Только декартово произведение, без zip, встроенного Sweep, .STEP, случайных сеток и параллельных симуляций.
-- Параметры содержат числа, не SPICE-суффиксы и не текст. Их подстановка во внешние модели не выполняется.
-- Для температур используйте temperatures_c либо постоянную .TEMP; температурные директивы валидируются прежним механизмом до подстановок.
-- Сохраняются ограничения по коротким именам кириллических путей моделей и доступности полной текстовой диагностики MixedSim.
-- Открытые NSX/SDF остаются в Altium; большая серия создаёт много вкладок.
+- Only Cartesian products: no zip, built-in Sweep, `.STEP`, random grids, or parallel simulations.
+- Parameters are numeric only, not SPICE suffixes or text. External model files are not subject to substitution.
+- Use `temperatures_c` or fixed `.TEMP` for temperatures; existing validation checks temperature directives before substitution.
+- Restrictions on short Windows filenames for Cyrillic paths and full-text MixedSim diagnostics remain.
+- Opened NSX/SDF documents remain in Altium; large sweeps produce many tabs.
