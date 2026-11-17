@@ -1,55 +1,55 @@
 # Spice Sifter 0.5 — Automatic Measurements
 
-## Среда и интеграция
+## Environment and Integration
 
-Windows, Python 3.14.5, Altium Designer 24.4.1.13; 30 октября 2026 года. Измерения добавлены поверх прежнего SDF-парсера. Runner, временный DelphiScript и независимые Sweep/Temperature-запуски сохранены. Ни одно измерение не создаёт схему, не изменяет модель и не запускает симуляцию повторно.
+Windows, Python 3.14.5, Altium Designer 24.4.1.13; October 30, 2026. Measurements were added on top of the existing SDF parser. The runner, temporary DelphiScript, and independent Sweep/Temperature runs were retained. A measurement does not create a new circuit, edit a model, or rerun simulation.
 
-## Реальные результаты MixedSim
+## Actual MixedSim Results
 
-| Испытание | Получено | Сопоставление |
+| Test | Measured | Reference |
 |---|---|---|
-| RC, R=1 кОм, C=1 мкФ: rise 10–90% | 2.197219880057017 мс | RC·ln(9)≈2.197224577 мс |
-| Та же RC: fall 90–10% | 2.19721701995022 мс | Та же теоретическая величина |
-| Задержка на уровне 50% | 0.6931484905720209 мс | RC·ln(2)≈0.693147181 мс |
-| Установление в полосу 1% | 4.605163563967684 мс | RC·ln(100)≈4.605170186 мс |
-| Значение RC при t=2 мс после запуска, фронт в 1 мс | 3.1606008385624094 В | 5·(1−exp(−1))≈3.160602794 В |
-| НЧ RC: срез относительно 1 Гц | 159.15494484242754 Гц | Номинальный 1/(2πRC)≈159.154943 Гц; конечная сетка/опорная частота ограничивают точность |
-| Идеальный C=1 мкФ | ≈1e−6 Ф при 100/1000/10000 Гц | Формула −1/(2πf·Im(Z)) |
-| Идеальный L=1 мГн | ≈1e−3 Гн на тех же частотах | Im(Z)/(2πf) |
-| Последовательная RLC: минимум импеданса | 5011.872336272697 Гц | Теория≈5032.921 Гц, отличие около 0.42%, разрешение DEC 100 |
+| RC, R=1 kΩ, C=1 µF: 10–90% rise | 2.197219880057017 ms | RC·ln(9)≈2.197224577 ms |
+| Same RC: 90–10% fall | 2.19721701995022 ms | Same theoretical result |
+| Delay at 50% | 0.6931484905720209 ms | RC·ln(2)≈0.693147181 ms |
+| Settling to 1% band | 4.605163563967684 ms | RC·ln(100)≈4.605170186 ms |
+| RC at t=2 ms, with step at t=1 ms | 3.1606008385624094 V | 5·(1−exp(−1))≈3.160602794 V |
+| RC low-pass cutoff relative to 1 Hz | 159.15494484242754 Hz | 1/(2πRC)≈159.154943 Hz; grid/reference frequency limits accuracy |
+| Ideal C=1 µF | ≈1e−6 F at 100/1000/10000 Hz | −1/(2πf·Im(Z)) |
+| Ideal L=1 mH | ≈1e−3 H at those frequencies | Im(Z)/(2πf) |
+| Series RLC: minimum impedance | 5011.872336272697 Hz | Theory≈5032.921 Hz; ≈0.42% difference, DEC 100 resolution |
 
-Mean, RMS и Ripple вычислены на том же RC SDF в интервале 5–9 мс: 4.9775249521360445 В, 4.977579480081974 В и 0.08990042897968298 В. Эти три результата возвращены как MEASURED без паспортных допусков. Все восемь transient-измерений использовали одну симуляцию; график был сокращён до 10 точек уже после расчётов.
+Mean, RMS, and ripple calculated from the same RC SDF in the 5–9 ms window were 4.9775249521360445 V, 4.977579480081974 V, and 0.08990042897968298 V. These values were returned as `MEASURED` without datasheet limits. All eight transient measurements used one simulation; the graph was reduced to ten points only after calculations.
 
-## MOSFET и температуры
+## MOSFET and Temperature
 
-Пример использует настоящую SPICE LEVEL=1-модель в MixedSim: VTO=2 В, KP=0.02 А/В², LAMBDA=0, W/L=1, TNOM=25 °C. Это аналитическая проверочная модель, не модель конкретного коммерческого MOSFET. Соответствие datasheet не заявляется.
+The example uses a real SPICE LEVEL=1 analytical model in MixedSim: VTO=2 V, KP=0.02 A/V², LAMBDA=0, W/L=1, TNOM=25 °C. It is not a model of a particular commercial MOSFET; datasheet compliance is not claimed.
 
-VGS=[2,2.1,2.2,4.5] В, VDS=[0.01,5] В, температуры −40/+25/+85 °C: 24 независимых запуска. При VDS=5 В извлечён порог при ID=0.25 мА; RDS(on) измерен при VGS=4.5 В, VDS=0.01 В.
+VGS=[2,2.1,2.2,4.5] V, VDS=[0.01,5] V, temperatures −40/+25/+85 °C: 24 independent runs. At VDS=5 V, threshold was extracted at ID=0.25 mA. RDS(on) was measured at VGS=4.5 V and VDS=0.01 V.
 
-| Температура | VGS при ID=0.25 мА | RDS(on) |
+| Temperature | VGS at ID=0.25 mA | RDS(on) |
 |---|---|---|
-| −40 °C | 2.1924023858648773 В | 14.220584423688212 Ом |
-| +25 °C | 2.1499999983299998 В | 20.040080159789547 Ом |
-| +85 °C | 2.1171026061641447 В | 25.760921343028016 Ом |
+| −40 °C | 2.1924023858648773 V | 14.220584423688212 Ω |
+| +25 °C | 2.1499999983299998 V | 20.040080159789547 Ω |
+| +85 °C | 2.1171026061641447 V | 25.760921343028016 Ω |
 
-При +25 °C аналитический порог из ID=KP/2·(VGS−VTO)² равен≈2.158114 В. Линейная интерполяция между 2.1 и 2.2 В даёт 2.15 В; отличие обусловлено грубой сеткой и нелинейной характеристикой. Измеренное значение не выдаётся за внутренний VTO=2 В. Теоретическое статическое RDS(on)=VDS/[KP·((VGS−VTO)·VDS−VDS²/2)]≈20.0400801603 Ом, что согласуется с MixedSim.
+At +25 °C, the analytical threshold from ID=KP/2·(VGS−VTO)² is ≈2.158114 V. Linear interpolation between 2.1 and 2.2 V gives 2.15 V; the difference is caused by the coarse grid and nonlinear characteristic. The measured value is not presented as the internal VTO=2 V. Theoretical static RDS(on)=VDS/[KP·((VGS−VTO)·VDS−VDS²/2)]≈20.0400801603 Ω, matching MixedSim.
 
-Температурные семьи не смешиваются. В каждом семейном результате перечислены четыре использованных run_id; RDS(on) относится к собственной OP-точке. Несколько совместимых измерений используют те же 24 запуска.
+Temperature families are kept separate. Each family-level result lists the four `run_id` values used; RDS(on) belongs to its own OP operating point. Multiple compatible measurements reuse the same 24 simulations.
 
-## Проверки
+## Verification
 
-- **79 автономных тестов**: прежние 58 без изменения требований и 21 тест измерений. Включены синтетические линейные фронты, разные события задержки, синус с неравномерной сеткой, трапеции/окна, точные пороги/плато/повторные X, установление, RC-срез, C/L, резонанс, допуски, независимость ошибок, температурные семейства, неоднозначные и неполные пересечения, реальные SDF RC/RLC.
-- **7 реальных измерительных сценариев**, 30 независимых симуляций и 27 результатов измерений. Шесть основных примеров дали PASS. Отдельный отрицательный сценарий корректно вернул ERROR: отсутствующий сигнал дал ERROR, независимое среднее — MEASURED, выход за допуск — FAIL; график сохранился.
-- Финальные алгоритмы повторно проверены по всем сохранённым реальным SDF без новых симуляций. Реальные RC/RLC-образцы включены в tests/fixtures.
+- **79 standalone tests:** the previous 58 unchanged plus 21 measurement tests. These include synthetic linear edges, multiple delay events, unevenly sampled sine waves, trapezoids/windows, exact threshold/plateau/duplicate X values, settling, RC cutoff, capacitance/inductance, resonance, tolerances, isolated failures, temperature families, ambiguous/incomplete crossings, and real RC/RLC SDFs.
+- **7 live measurement scenarios:** 30 independent simulations and 27 measurement results. Six positive examples returned PASS. One negative scenario correctly returned ERROR: a missing signal yielded ERROR, an independent mean yielded MEASURED, an out-of-limit check yielded FAIL, and the graph was retained.
+- Final algorithms were rechecked against all saved real SDFs without new simulations. Real RC/RLC samples are included under `tests/fixtures`.
 
-Воспроизведение: `python -m unittest discover -s tests -v`; при открытом Altium — `python tests/acceptance_measurements.py`. Отчёт tests/measurement_acceptance_report.json локальный, исключён из Git.
+Reproduce with `python -m unittest discover -s tests -v`; with Altium open, run `python tests/acceptance_measurements.py`. The local `tests/measurement_acceptance_report.json` is excluded from Git.
 
-## Регрессия
+## Regression
 
-Без изменения старых JSON выполнены tests/acceptance.py — **7/7**, tests/acceptance_ac.py — **11/11**, tests/acceptance_temperature.py — **9/9**, tests/acceptance_sweep.py — **11/11**. Все наборы завершились кодом 0. Сохранились OP/DC, Transient, AC/импеданс, температуры, Parameter Sweep и Graph Export.
+The original JSONs remained unchanged. `tests/acceptance.py` passed **7/7**, `tests/acceptance_ac.py` **11/11**, `tests/acceptance_temperature.py` **9/9**, and `tests/acceptance_sweep.py` **11/11**. All suites exited with code 0. OP/DC, Transient, AC/impedance, temperature, Parameter Sweep, and Graph Export behavior remained intact.
 
-## Ограничения точности
+## Accuracy Limitations
 
-Интерполяция не добавляет информации между рассчитанными точками. Частота резонанса берётся с сетки. Sweep-порог линейно интерполируется; для точности нужны более плотные значения параметра. Фронт с неоднозначным пороговым плато или разворотом между заданными уровнями отклоняется. Ось действительного сигнала должна возрастать; конфликтующие повторные X не исправляются автоматически.
+Interpolation does not create information between simulated points. Resonance frequency is selected from the sampled grid. Sweep threshold values use linear interpolation; tighter parameter spacing is needed for precision. Edges with ambiguous threshold plateaus or direction reversals between specified levels are rejected. Real-valued signal X coordinates must increase; conflicting duplicate X values are not silently corrected.
 
-Минимум импеданса, Cs/Ls/ESR и статический VDS/ID имеют смысл только в заданной схеме и условиях. Уровни, окна, направление тока, критерий порога и допуски задаёт пользователь. Самонагрев, FFT, подгонка модели и извлечение паспортных данных не добавлялись.
+Minimum impedance, Cs/Ls/ESR, and static VDS/ID are meaningful only for the specified circuit and operating conditions. The user specifies levels, windows, current direction, threshold criteria, and limits. Self-heating, FFT, model fitting, and automatic datasheet extraction were not implemented.
