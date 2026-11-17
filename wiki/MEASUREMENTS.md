@@ -1,51 +1,49 @@
-# Automatic Measurements — формат и алгоритмы v0.5
+# Automatic Measurements — Formats and Algorithms (v0.5)
 
-## Вход и результат
+## Input and Output
 
-Необязательный массив `measurements` содержит фиксированные типы измерений; никакие Python-выражения из JSON не исполняются. Каждый запрос имеет уникальные `id`, `type` и необходимые поля из таблицы ниже. `analysis` выбирается из tran/dc/op/ac. Для действительных осциллограмм по умолчанию tran, для rds_on и sweep_crossing — op; AC-типы выбирают ac автоматически.
+The optional `measurements` array contains predefined measurement types; Python expressions in JSON are **never executed**. Each request specifies a unique `id`, `type`, and type-specific fields. `analysis` supports `tran`, `dc`, `op`, and `ac`. Real-waveform measurements default to transient, `rds_on` and `sweep_crossing` to OP, and AC measurement types automatically select AC.
 
-Общие поля: `limits` с min и/или max (конечные включительные границы), `when`, `temperature_c`, `window: {start, stop}`, `markers: true`. Отсутствие limits означает только измерение, не подтверждение соответствия. Допуски проверяет прежний Validator.
+Common fields: `limits` with inclusive finite `min`/`max`, `when`, `temperature_c`, `window: {start, stop}`, and `markers: true`. Without limits, a value is measured but not validated against datasheet specifications. The existing Validator evaluates limits.
 
-В результате верхнеуровневый `measurements` содержит value, unit, status, id, type, контекст run_id/parameters/temperature_c, limits и при запросе markers. Статусы: MEASURED без допусков, PASS/FAIL с допусками, ERROR при невозможности расчёта. Общий статус ERROR имеет приоритет над FAIL. Прежние checks/runs/summary описывают прежние проверки и запуски и не переписываются из-за измерений; общий статус дополнительно учитывает measurements. Без запроса раздел measurements не добавляется.
+Top-level `measurements` results include value, unit, status, id, type, run/parameter/temperature context, limits, and optional markers. A measurement without limits is `MEASURED`; one with limits is `PASS` or `FAIL`; computation failures are `ERROR`. Overall ERROR takes precedence over FAIL. Existing `checks`, `runs`, and `summary` retain their legacy meanings; measurements additionally affect the overall status. When no measurements are requested, the field is omitted.
 
-`checks: []` допустим при наличии измерений. Безопасные входные ошибки обнаруживаются до Altium. Ошибка вычисления одного запроса не останавливает остальные, не удаляет графики и не вызывает повторную симуляцию. Каждая осциллограмма обрабатывается в полном разрешении до сокращения графика max_points.
+An empty `checks: []` is accepted when measurements exist. Invalid inputs are detected before Altium when possible. A single measurement error neither aborts independent measurements nor discards graphs or reruns simulation. Measurements use full-resolution SDF before optional graph reduction with `max_points`.
 
-## Действительные осциллограммы
+## Real-valued Waveforms
 
-| type | Дополнительные поля | Результат |
+| type | Additional fields | Calculation |
 |---|---|---|
-| at | signal, x | Значение с линейной интерполяцией |
-| crossing | signal, level, edge, occurrence | Координата пересечения |
-| mean | signal | Интеграл сигнала / длина интервала |
-| rms | signal | Корень из точного интеграла квадрата кусочно-линейного сигнала / длина интервала |
-| peak_to_peak | signal | max−min |
-| ripple | signal, window | Peak-to-Peak в явном установившемся окне |
-| rise_time | signal, low, high; from_percent=10, to_percent=90 | Время нарастания |
-| fall_time | signal, low, high; from_percent=90, to_percent=10 | Время спада |
-| delay | trigger, target, occurrence | Задержка событий |
-| settling_time | signal, target_value, start, stop; tolerance_abs или tolerance_rel | Время установления относительно start |
+| `at` | signal, x | Linearly interpolated value |
+| `crossing` | signal, level, edge, occurrence | Crossing coordinate |
+| `mean` | signal | Integral divided by interval duration |
+| `rms` | signal | Exact integral of squared piecewise-linear waveform, divided by interval, then square root |
+| `peak_to_peak` | signal | max−min |
+| `ripple` | signal, window | Peak-to-peak in a specified settled window |
+| `rise_time` | signal, low, high; from_percent=10, to_percent=90 | Rise duration |
+| `fall_time` | signal, low, high; from_percent=90, to_percent=10 | Fall duration |
+| `delay` | trigger, target, occurrence | Time between events |
+| `settling_time` | signal, target_value, start, stop; tolerance_abs or tolerance_rel | Settling time from start |
 
-window ограничивает X, для Transient — секунды. Границы интерполируются; экстраполяции нет. Mean использует трапеции по реальным координатам. RMS использует точное аналитическое интегрирование квадрата кусочно-линейно интерполированного сигнала, а не трапеции по квадратам отсчётов. Нужны минимум две различные точки; at и OP-отношение могут использовать одну.
+`window` restricts the X range (seconds for transient). Boundaries are interpolated, never extrapolated. Mean integrates using trapezoids on actual X coordinates. RMS integrates the *square* of the piecewise-linear interpolant analytically, rather than trapezoid-integrating squared samples. At least two distinct samples are required except for `at` and a single-point OP ratio.
 
-Ось должна возрастать. Совпадающие X с одинаковым Y объединяются; конфликтующие Y при одном X возвращают INVALID_AXIS. Неубывающая ось после такого объединения должна содержать достаточно точек. NaN/Infinity отклоняются. Для DC единица X берётся из независимой волны; при неоднозначности задайте x_unit явно.
+The X axis must increase. Duplicate X with equal Y is deduplicated; duplicate X with conflicting Y yields `INVALID_AXIS`. The resulting non-decreasing axis must provide enough samples. NaN and Infinity are rejected. For DC, the X unit comes from the independent wave, or must be supplied as `x_unit` if ambiguous.
 
 ### RMS
 
-Между соседними точками SDF сигнал считается линейным. Для отрезка `[x_i, x_{i+1}]` точный интеграл квадрата равен
+Between adjacent SDF samples, the signal is assumed linear. The exact integral over `[x_i, x_(i+1)]` is:
 
-`I_i = (x_{i+1} − x_i)(y_i² + y_i·y_{i+1} + y_{i+1}²)/3`,
+`I_i = (x_(i+1) − x_i)(y_i² + y_i·y_(i+1) + y_(i+1)²)/3`
 
-а результат — `sqrt(ΣI_i / (x_N − x_0))`. Используется полный массив SDF, устойчивое суммирование `math.fsum` и сложность O(N). `window` учитывается существующей интерполяцией границ; экстраполяции нет.
+The result is `sqrt(ΣI_i / (x_N − x_0))`. Calculations use the full SDF, `math.fsum`, and O(N) complexity. Window edges use interpolation, without extrapolation. This is exact for the *interpolated* waveform but cannot recover fast changes absent from sampled SDF; reduce the maximum `.TRAN` timestep for better physical accuracy.
 
-Алгоритм точен для линейной интерполяции между рассчитанными точками, но не восстанавливает быстрые изменения, которые симулятор не сохранил в SDF. Для повышения физической точности уменьшайте максимальный временной шаг `.TRAN`.
+### Crossings and Edges
 
-### Пересечения и фронты
+`edge` is `rising`, `falling`, or `either`; `occurrence` is `first` (default) or `last`. Crossings are linearly interpolated. An exact threshold hit is counted once. Touching a threshold and returning to the same side is not a crossing. One-sided events at window boundaries follow the adjacent segment's direction. A nonzero-duration threshold plateau without a unique crossing yields `AMBIGUOUS_CROSSING`.
 
-edge: rising/falling/either; occurrence: first/last, по умолчанию first. Координата вычисляется линейно между соседними точками. Точное попадание в порог учитывается один раз; касание порога с возвратом на ту же сторону внутри окна не считается пересечением. На краю окна допускается одностороннее событие по направлению соседнего сегмента. Плато на пороге с ненулевой длительностью, не позволяющее выбрать уникальную координату, даёт AMBIGUOUS_CROSSING.
+Rise/fall require `low < high`. Percentages are relative to the low-to-high span; rise follows increasing values and fall decreasing values. Both crossings must belong to the *same monotonic edge*; the beginning of one pulse cannot be paired with the end of another. Restrict `window` for noisy or complex signals.
 
-Rise/fall требуют заданных low < high. Проценты отсчитываются от low до high; для rise — от меньшего к большему, для fall — от большего к меньшему. Два пересечения должны принадлежать одному монотонному фронту. Нельзя соединять начало одного импульса с концом другого; для сложных/шумных сигналов ограничивайте window.
-
-Delay задаёт события так:
+Delay example:
 
 ```json
 {
@@ -58,29 +56,29 @@ Delay задаёт события так:
 }
 ```
 
-Выбирается first/last trigger, затем первое target не раньше trigger и строго раньше следующего trigger. Если target появилось только в следующем импульсе, возвращается ошибка. Для последнего trigger границей служит конец доступной осциллограммы; при необходимости задавайте window.
+First/last selects a trigger event; the target must be the first matching event no earlier than the trigger and strictly before the next trigger. A target only appearing in the next pulse is an error. The final trigger can use the end of available data; set a window when needed.
 
-Settling требует ровно одного допуска. tolerance_abs задаётся в единицах сигнала; tolerance_rel — доля от abs(target_value), например 0.01 для 1%. Для нулевого target_value используйте абсолютный допуск. Ищется последнее возвращение в полосу после последнего выхода. После входа нужны минимум две точки подтверждения; если сигнал снова выходит или не вошёл до stop, результата нет. Если весь интервал находится в полосе — время 0.
+Settling requires **exactly one** tolerance: `tolerance_abs` in signal units or `tolerance_rel` as a fraction of `abs(target_value)` (0.01 means 1%). Use absolute tolerance for a zero target. Find the final re-entry into the band after the last excursion. At least two subsequent in-band samples must confirm it. Any new excursion or failure to settle before `stop` means no result; if the entire interval is within the band, settling time is zero.
 
 ## AC
 
-| type | Поля | Единица |
+| type | Fields | Unit |
 |---|---|---|
-| cutoff_3db | input, output, reference_frequency_hz, direction=high/low | Hz |
-| resonant_frequency | voltage, current, current_sign; method=minimum_impedance; frequency_min_hz/frequency_max_hz | Hz |
-| capacitance_series | voltage, current, current_sign, frequency_hz | F |
-| inductance_series | voltage, current, current_sign, frequency_hz | H |
-| esr | voltage, current, current_sign, frequency_hz | Ohm |
+| `cutoff_3db` | input, output, reference_frequency_hz, direction=high/low | Hz |
+| `resonant_frequency` | voltage, current, current_sign; method=minimum_impedance; frequency_min_hz/frequency_max_hz | Hz |
+| `capacitance_series` | voltage, current, current_sign, frequency_hz | F |
+| `inductance_series` | voltage, current, current_sign, frequency_hz | H |
+| `esr` | voltage, current, current_sign, frequency_hz | Ohm |
 
-Используются комплексные данные одного анализа/запуска с совпадающими частотными сетками. Для импеданса действуют frequency_sampling exact/interpolate и min_current_a (по умолчанию 1e-15 А) из v0.2. current_sign обязателен, 1 или −1. Подгонки направления под ожидания нет.
+All calculations use matching complex frequency grids from the same run/analysis. Impedance uses v0.2 `frequency_sampling` (`exact`/`interpolate`) and `min_current_a` (default 1e-15 A). `current_sign` must explicitly be 1 or −1; the tool never adjusts sign to fit expected results.
 
-Cutoff: H=Vout/Vin, уровень abs(H_ref)/sqrt(2), reference_frequency_hz задаётся явно. Для high выбирается ближайшее пересечение выше reference при спаде, для low — ближайшее пересечение ниже reference при подъёме. Интерполяция в dB; координата — log(f) для логарифмической сетки и f для линейной. frequency_axis=auto определяет равномерную линейную/логарифмическую сетку по минимум трём точкам. Для нерегулярной сетки или двух точек нужно явно frequency_axis=linear либо log. Максимум не используется как неявная опорная точка.
+Cutoff uses `H=Vout/Vin`, threshold `abs(H_ref)/sqrt(2)`, and an explicit `reference_frequency_hz`. For `high`, choose the nearest falling crossing above the reference; for `low`, the nearest rising crossing below it. Interpolate in dB; use log(f) for logarithmic grids and f for linear grids. `frequency_axis=auto` detects uniform linear/log spacing from at least three points. For irregular or two-point grids, set `frequency_axis=linear` or `log` explicitly. No implicit peak-based reference is used.
 
-Резонанс: единственный строгий внутренний минимум abs(Z) в заданном окне. Края не считаются резонансом, несколько минимумов — ошибка. Частота возвращается непосредственно с рассчитанной сетки, без подгонки; точность ограничена её шагом. Минимум импеданса не является универсальным определением резонанса произвольной схемы.
+Resonance requires one unique strict interior minimum of `abs(Z)` within the requested window. Endpoints do not count; multiple minima are errors. The result is the actual sampled grid frequency (no fitting). Minimum impedance is not a universal resonance definition for arbitrary networks.
 
-Cs=−1/(2πf·Im(Z)), требуется отрицательная реактивность; Ls=Im(Z)/(2πf), требуется положительная. Модуль Im(Z) должен быть не меньше min_reactance_ohm (по умолчанию 1e-12 Ом). esr возвращает Re(Z). Это эквивалентные последовательные характеристики в заданных условиях, не извлечение внутренних параметров модели и не автоматическое подтверждение паспортного ESR.
+`Cs=−1/(2πf·Im(Z))` requires negative reactance; `Ls=Im(Z)/(2πf)` requires positive reactance. `abs(Im(Z))` must exceed `min_reactance_ohm` (default 1e−12 Ω). `esr` returns `Re(Z)`. These are condition-dependent equivalent series values, not internal model extraction or automatic datasheet validation.
 
-## Parameter Sweep и MOSFET
+## Parameter Sweep and MOSFET
 
 ```json
 {
@@ -99,16 +97,16 @@ Cs=−1/(2πf·Im(Z)), требуется отрицательная реакт�
 }
 ```
 
-Для каждого подходящего запуска извлекается first/last/min/max сигнала. window у sweep_crossing ограничивает ось параметра уже собранной характеристики, а не временную ось каждого запуска. current_sign при необходимости меняет направление этого сигнала (по умолчанию 1). Пары сортируются по параметру; порог находится линейной интерполяцией. parameter_unit по умолчанию V; для другой величины задайте его явно.
+For every matching run, extract `first`, `last`, `min`, or `max`. On `sweep_crossing`, the window limits the **assembled parameter axis**, not each run's time axis. `current_sign` optionally reverses signal direction (default 1). Samples are ordered by the parameter and threshold crossing is interpolated linearly. `parameter_unit` defaults to V; override when measuring another quantity.
 
-when фиксирует другие параметры; измеряемую ось фиксировать нельзя. Несколько результатов при одном X — SWEEP_AMBIGUOUS, даже если значения совпали. Семейства разных температур всегда измеряются отдельно. Неполная серия или неудавшийся нужный запуск не замалчиваются. Несколько пересечений по умолчанию дают AMBIGUOUS_CROSSING; явное occurrence first/last разрешает выбор.
+`when` fixes other parameters but must not fix the measured parameter. Multiple results for the same X yield `SWEEP_AMBIGUOUS`, even if values match. Different temperatures form separate families. Missing/failed required runs are reported, never suppressed. Multiple crossings default to `AMBIGUOUS_CROSSING`; explicit `occurrence: first`/`last` chooses one.
 
-Семейный результат содержит scope=sweep и run_ids использованных запусков. VGS(th) при заданном ID не тождествен внутреннему VTO и зависит от VDS, температуры, модели и сетки. Условия пользователь задаёт сам; Spice Sifter не выбирает их из datasheet.
+Family-level results include `scope=sweep` and the contributing `run_ids`. A VGS(th) measured at a specified ID is not the internal VTO; it depends on VDS, temperature, model, and sampling grid. Users choose the test conditions, not Spice Sifter.
 
-rds_on задаёт voltage/current/current_sign, необязательные when/temperature_c. По умолчанию используется единственная точка OP; для DC с несколькими точками требуются analysis=dc и x. Напряжение должно быть именно VDS, в том числе дифференциальное при незаземлённом истоке. Ток берётся из той же рабочей точки. Результат VDS/(current_sign·ID) — статическое отношение в омах, не dV/dI.
+`rds_on` requires voltage/current/current_sign and optionally `when`/`temperature_c`. It defaults to a single OP point; use `analysis=dc` and `x` for a multi-point DC sweep. Voltage must be the actual VDS, including differential measurement for a floating source. Current must come from the same operating point. `VDS/(current_sign·ID)` is a static resistance in ohms, **not** dV/dI.
 
-## Примеры и ошибки
+## Examples and Errors
 
-Примеры: examples/measure_transient.json, measure_cutoff.json, measure_capacitor.json, measure_inductor.json, measure_resonance.json, measure_mosfet.json. Последний одновременно извлекает VGS(th) и RDS(on) при трёх температурах, используя одну совокупность запусков.
+Examples: `examples/measure_transient.json`, `measure_cutoff.json`, `measure_capacitor.json`, `measure_inductor.json`, `measure_resonance.json`, and `measure_mosfet.json`. The MOSFET example extracts VGS(th) and RDS(on) across three temperatures using one shared set of simulations.
 
-Коды: MEASUREMENT_INVALID, UNSUPPORTED, SIGNAL_MISSING, NOT_ENOUGH_POINTS, NO_CROSSING, AMBIGUOUS_CROSSING, NO_EXTREMUM, OUT_OF_RANGE, ZERO_DIVISION, INVALID_AXIS, INVALID_WINDOW, SWEEP_AMBIGUOUS, NON_FINITE (в JSON каждый с префиксом MEASUREMENT_). Ошибки базового AC-парсера могут сохранять исходный код с подробной причиной. Результаты не округляются и не сопровождаются обещанием точности выше разрешения SDF.
+Measurement error names include `MEASUREMENT_INVALID`, `UNSUPPORTED`, `SIGNAL_MISSING`, `NOT_ENOUGH_POINTS`, `NO_CROSSING`, `AMBIGUOUS_CROSSING`, `NO_EXTREMUM`, `OUT_OF_RANGE`, `ZERO_DIVISION`, `INVALID_AXIS`, `INVALID_WINDOW`, `SWEEP_AMBIGUOUS`, and `NON_FINITE`; report JSON prefixes each with `MEASUREMENT_`. Underlying AC parser errors may retain their more specific codes. Results are not rounded or assigned precision beyond the SDF resolution.
