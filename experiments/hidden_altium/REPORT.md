@@ -1,232 +1,146 @@
-# Отчёт: Altium Designer на отдельном скрытом Windows Desktop
+# Experiment Report: Hidden Altium on a Separate Windows Desktop
 
-**Проект:** `nomatin/spice-sifter` (ветка `dev`, исходный коммит `f8c4599`)
-**Дата эксперимента:** 16 ноября 2026
-**Тип работы:** изолированный PoC в `experiments/hidden_altium/`, без интеграции
-**Цель:** второй независимый экземпляр Altium Designer для автоматических
-SPICE-тестов — на отдельном невидимом Win32 Desktop, при работающем экземпляре
-пользователя.
+**Repository:** `nomatin/spice-sifter` (dev; original commit `f8c4599`)  
+**Date:** November 16, 2026  
+**Scope:** standalone proof of concept under `experiments/hidden_altium/`, with no production integration at the time  
+**Objective:** run automated SPICE tests in a second independent Altium Designer instance on an invisible Win32 Desktop while preserving the working Altium instance.
 
-## 1. Итог
+## 1. Summary
 
-Эксперимент **успешен**: все обязательные проверки пройдены на Altium Designer
-**24.4.1.13** (Windows 11 Pro 10.0.26200, Python 3.14.5).
+**All required checks PASSED** with Altium Designer 24.4.1.13, Windows 11 Pro 10.0.26200, and Python 3.14.5.
 
-Ключевой результат: механизм `X2.EXE -RScriptingSystem:RunScriptFile(...)`
-маршрутизируется **по Desktop**. Если `-R`-процесс создан с
-`STARTUPINFO.lpDesktop = winsta0\SpiceSifterHidden-<id>`, скрипт исполняет
-именно скрытый экземпляр. Это позволяет адресно управлять тестовым Altium без
-изменения production-кода и без `SwitchDesktop`.
+The key result is that `X2.EXE -RScriptingSystem:RunScriptFile(...)` is **Desktop-routed**. A `-R` launcher created with `STARTUPINFO.lpDesktop = winsta0\SpiceSifterHidden-<id>` delivers the script to the hidden instance, without `SwitchDesktop`.
 
-| Проверка | Результат |
+| Check | Result |
 |---|---|
-| Создание скрытого Desktop | **PASS** |
-| Запуск второго X2.EXE | **PASS** |
-| Независимость процессов | **PASS** |
-| Отсутствие окон на рабочем Desktop | **PASS** |
-| Адресный запуск DelphiScript | **PASS** |
-| Генерация NSX | **PASS** |
-| Выполнение MixedSim | **PASS** |
-| Безопасный перезапуск | **PASS** |
+| Hidden Desktop creation | PASS |
+| Second X2.EXE launch | PASS |
+| Independent processes | PASS |
+| No test windows on working Desktop | PASS |
+| Targeted DelphiScript routing | PASS |
+| NSX generation | PASS |
+| MixedSim execution | PASS |
+| Safe restart | PASS |
 
-Дополнительно: рабочий экземпляр оставался живым и не открывал тестовые
-документы на всех этапах; тестовый экземпляр трижды перезапускался и каждый раз
-снова принимал скрипты и выполнял симуляцию.
+The reference Altium remained running and never opened test documents. The hidden Altium was restarted three times and successfully ran scripts/simulations each time.
 
-> **Важное уточнение по условиям.** На момент эксперимента пользовательский
-> Altium не был запущен. Поэтому роль «рабочего» Altium играл эталонный
-> экземпляр, запущенный самим экспериментом на обычном рабочем столе
-> (`X2.EXE` из той же установки, тот же пользователь, тот же сеанс). Код
-> обнаружения при этом умеет подхватывать и уже работающий Altium пользователя,
-> не завершая его; проверка с реальным пользовательским экземпляром не
-> выполнялась, так как его не было.
+**Qualification:** The user's Altium was not open during the experiment. The "working instance" was therefore an equivalent **reference instance started by the experiment**, from the same installation and user session. Code to detect an already-running user instance was implemented without terminating it, but that exact condition was not tested.
 
-## 2. Методика
+## 2. Method
 
-Использован только Win32 API через `ctypes`:
+Only Win32 APIs accessed through Python `ctypes` were used:
 
-1. `CreateDesktopW("SpiceSifterHidden-<id>", …, DESKTOP_ALL_ACCESS)` — новый
-   Desktop в `winsta0` текущего сеанса.
-2. `CreateProcessW(X2.EXE, …, STARTUPINFO.lpDesktop = "winsta0\\<desktop>")` —
-   запуск Altium на этом Desktop. `SwitchDesktop` не вызывается.
-3. `EnumDesktopWindows` + `GetWindowThreadProcessId` — принадлежность окон
-   конкретному PID и Desktop.
-4. `OpenProcess` + `GetProcessTimes` — PID **и** время создания процесса;
-   перед любым принудительным завершением идентичность проверяется повторно
-   (защита от переиспользования PID).
-5. `CreateJobObject` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` — завершение только
-   дерева процессов, созданных экспериментом.
-6. Для атрибуции скрипта: скрипт открывает документ с уникальным nonce, а окно
-   документа можно увидеть только на Desktop исполнившего экземпляра.
-   Дополнительно маркер содержит путь активного документа, записанный самим
-   Altium.
+1. `CreateDesktopW(..., DESKTOP_ALL_ACCESS)` creates a dedicated Desktop within `winsta0`.
+2. `CreateProcessW` with `STARTUPINFO.lpDesktop` starts X2.EXE on it; no `SwitchDesktop`.
+3. `EnumDesktopWindows` and `GetWindowThreadProcessId` prove window-to-PID/Desktop ownership.
+4. `OpenProcess` and `GetProcessTimes` establish PID plus creation time. Identity is rechecked before any forced termination.
+5. `CreateJobObject` and `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` restrict termination to experiment-owned processes.
+6. A nonce-named document, visible only on the executor's Desktop, proves script routing. The marker also stores Altium's reported active document path.
 
-Production-код (`runtime_state.py`, `spice_sifter.py`, `dblib_runner.py`,
-`dblib_resources/*.pas`) не изменялся. `dblib_runner.prepare_run`,
-`build_report`, `preflight_component` и `verify_netlist` использованы как есть.
+Production modules `runtime_state.py`, `spice_sifter.py`, `dblib_runner.py`, and `dblib_resources/*.pas` were not modified. Existing `prepare_run`, `build_report`, `preflight_component`, and `verify_netlist` were reused.
 
-## 3. Этапы
+## 3. Experiment Stages
 
-### Этап 0 — контроль Win32-plumbing (без Altium)
+### Stage 0 — Win32 Plumbing (Without Altium)
 
-`stage0_plumbing.py`, прогон `stage0_20261116_173049_45970d`.
-На скрытом Desktop запущен PowerShell WinForms с окном `SpiceSifterDesktopProbe`
-(PID 60424). Окно найдено на скрытом Desktop, на рабочем Desktop окон этого PID
-нет (0 из 374), процесс штатно закрыт по `WM_CLOSE` (exit code 0).
+Script: `stage0_plumbing.py`; run `stage0_20261116_173049_45970d`.
 
-Это исключает версию «отрицательный результат получен из-за ошибки в
-`CreateProcessW`/`EnumDesktopWindows`».
+A PowerShell WinForms `SpiceSifterDesktopProbe` window (PID **60424**) appeared on the hidden Desktop, with **0 of 374** working-Desktop windows belonging to that PID. Normal `WM_CLOSE` exited with code 0. This verified `CreateProcessW` and `EnumDesktopWindows` independently of Altium.
 
-### Этап 1 — два независимых экземпляра
+### Stage 1 — Two Independent Instances
 
-`stage1_launch.py`, прогон `stage1_20261116_173513_eb9f97`.
+Script: `stage1_launch.py`; run `stage1_20261116_173513_eb9f97`.
 
-| Параметр | Значение |
+| Metric | Observation |
 |---|---|
-| Рабочий Altium (эталон) | PID **16400**, создан `2026-11-16T17:35:14.617Z` |
-| Скрытый Altium | PID **41420**, создан `2026-11-16T17:35:49.113Z` |
-| Desktop | `SpiceSifterHidden-5d3fbacdf27b` |
-| Инициализация | 34.5 с / 34.4 с |
-| Окон у скрытого | 121+ (на скрытом Desktop) |
-| Окон тестового PID на рабочем Desktop | 0 |
-| Блокирующие диалоги | не обнаружены |
-| Второй процесс через 30 с | жив |
-| Таблица процессов | оба PID, оба `responding=true` |
+| Working/reference Altium | PID **16400**; `2026-11-16T17:35:14.617Z` |
+| Hidden Altium | PID **41420**; `2026-11-16T17:35:49.113Z` |
+| Hidden Desktop | `SpiceSifterHidden-5d3fbacdf27b` |
+| Initialization | 34.5 s / 34.4 s |
+| Hidden windows | 121+ on hidden Desktop |
+| Hidden PID windows on working Desktop | 0 |
+| Blocking dialogs | Not detected |
+| Second instance after 30 s | Alive |
+| Process table | Both PIDs, `responding=true` |
 
-Проверки `test_windows_on_hidden_only`, `no_test_windows_on_working_desktop`,
-`working_pid_unchanged`, `working_instance_survived` — PASS.
+`test_windows_on_hidden_only`, `no_test_windows_on_working_desktop`, `working_pid_unchanged`, and `working_instance_survived` all passed.
 
-### Этап 2 — адресный DelphiScript
+### Stage 2 — Targeted DelphiScript Routing
 
-`stage2_script.py`, прогон `stage2_20261116_174114_4225bc`.
-Эталон PID **45740**, скрытый PID **21696**.
+Script: `stage2_script.py`; run `stage2_20261116_174114_4225bc`. Reference PID **45740**, hidden PID **21696**.
 
-| Маршрут `-R` | PID launcher | Фактический исполнитель | Доказательство |
+| Launcher Desktop | Launcher PID | Executor PID | Proof |
 |---|---|---|---|
-| Рабочий Desktop | 33156 | **45740** (рабочий) | окно `probe_dd1fd7bb6f.txt` только на рабочем Desktop |
-| Скрытый Desktop | 32260 | **21696** (скрытый) | окно `probe_38b5465358.txt` только на скрытом Desktop |
+| Working | **33156** | **45740** | `probe_dd1fd7bb6f.txt` visible only on working Desktop |
+| Hidden | **32260** | **21696** | `probe_38b5465358.txt` visible only on hidden Desktop |
 
-Оба launcher-процесса завершились сами с кодом 0 (14.1 с и 5.8 с), новых
-долгоживущих `X2.EXE` не появилось. Маркеры содержали `STATUS=OK`,
-`DOC_OPEN=YES` и путь активного документа, записанный Altium.
+The launchers exited normally with code 0 in 14.1 s and 5.8 s; no new long-lived X2.EXE processes remained. Markers included `STATUS=OK`, `DOC_OPEN=YES`, and the active document path written by Altium.
 
-Вывод: `-R` не является глобальной командой «первому экземпляру»; привязка идёт
-к Desktop, на котором создан процесс. Это и есть рабочий способ адресации.
+**Result:** `-R` does not globally target the first instance. It targets the instance associated with the launcher's Desktop.
 
-### Этап 3 — реальный SPICE-тест в скрытом Altium
+### Stage 3 — Live DbLib SPICE Test
 
-`stage3_spice.py`, прогон `stage3_20261116_175425_0a27f1`.
-Эталон PID **41268**, скрытый PID **31932**, launcher **49372**.
-Тест: `examples/dblib_resistor_r0009.json`, `MY_LIB.DbLib`, таблица
-`Резисторы`, компонент `R0009`, fixture `resistor_dc`.
-Рабочий каталог: `temp/dblib_runs/20261116_205536_dd7ac5`.
+Script: `stage3_spice.py`; run `stage3_20261116_175425_0a27f1`. Reference PID **41268**, hidden PID **31932**, launcher **49372**.
 
-| Проверка | Значение |
+Input: `examples/dblib_resistor_r0009.json`, library `MY_LIB.DbLib`, the resistor table, component `R0009`, and fixture `resistor_dc`. Run directory: `temp/dblib_runs/20261116_205536_dd7ac5`.
+
+| Check | Observation |
 |---|---|
-| `STATUS` скрипта | `OK` |
-| Все 9 стадий `dblib_runner` | PASS (library_lookup … schematic_cleanup) |
-| NSX | сгенерирован Altium, 1472 байта |
-| Проверка NSX (`verify_netlist`) | все пункты true, модель `MY_LIB_R_TCR` |
-| SDF | сохранён MixedSim, 9291 байт, успешно разобран |
-| Измерение | `v(dut_p) = -1.0004 В` при допуске `[-1.06; -0.94]` → PASS |
-| Очистка схемы | `schematic_saved_after_cleanup=1` |
-| Документы теста в рабочем Altium | отсутствуют |
+| Script STATUS | OK |
+| All 9 `dblib_runner` stages | PASS (library_lookup through schematic_cleanup) |
+| NSX | Altium generated, 1472 bytes |
+| `verify_netlist` | All checks true; model `MY_LIB_R_TCR` |
+| SDF | MixedSim generated, 9291 bytes, parsed successfully |
+| Measurement | `v(dut_p) = -1.0004 V` within `[-1.06, -0.94]`: PASS |
+| Cleanup | `schematic_saved_after_cleanup=1` |
+| Test documents in working Altium | None |
 
-NSX и SDF созданы именно скрытым экземпляром: файлы появились в его рабочем
-каталоге после `ADVSIM:RunSimulator`, а на рабочем Desktop нет ни окна проекта
-`Test_20261116_205536_dd7ac5.PrjPcb`, ни окна NSX/SDF.
+NSX/SDF appeared after `ADVSIM:RunSimulator` in the hidden run directory. No `Test_20261116_205536_dd7ac5.PrjPcb`, NSX, or SDF window appeared on the working Desktop.
 
-### Этап 4 — жизненный цикл (3 цикла)
+### Stage 4 — Three Lifecycle Cycles
 
-`stage4_lifecycle.py --cycles 3`, прогон `stage4_20261116_183819_03c005`.
-Эталонный («рабочий») Altium — PID **59480**, жил весь эксперимент.
-Скрытый Desktop — `SpiceSifterHidden-dc9b2881276e` (один на все циклы).
+Script: `stage4_lifecycle.py --cycles 3`; run `stage4_20261116_183819_03c005`. Reference PID **59480** remained running. Hidden Desktop: `SpiceSifterHidden-dc9b2881276e`, reused for all three cycles.
 
-| Цикл | PID | Время создания (UTC) | READY | SCRIPT | SIMULATION | STOP |
+| Cycle | Hidden PID | Creation UTC | READY | SCRIPT | SIMULATION | STOP |
 |---|---|---|---|---|---|---|
-| 1 | **31580** | `18:38:58.298644Z` | 30.4 с | OK, исполнен скрытым | NSX+SDF, PASS | принудительно, PID исчез |
-| 2 | **53060** | `18:39:59.795122Z` | 16.1 с | OK, исполнен скрытым | NSX+SDF, PASS | принудительно, PID исчез |
-| 3 | **45444** | `18:40:49.991622Z` | 36.5 с | OK, исполнен скрытым | NSX+SDF, PASS | принудительно, PID исчез |
+| 1 | **31580** | `18:38:58.298644Z` | 30.4 s | Hidden executor: OK | NSX+SDF, PASS | Forced; PID gone |
+| 2 | **53060** | `18:39:59.795122Z` | 16.1 s | Hidden executor: OK | NSX+SDF, PASS | Forced; PID gone |
+| 3 | **45444** | `18:40:49.991622Z` | 36.5 s | Hidden executor: OK | NSX+SDF, PASS | Forced; PID gone |
 
-Для каждого цикла:
+All PIDs and creation times were distinct. Before termination, `identity_rechecked=true`. Processes disappeared within 0–2 s; no hidden windows or unrelated X2.EXE remained. The working instance's identity, window set, and documents were stable (`working_ui_stable=true` for all three cycles).
 
-- PID уникален, время создания уникально → PID не переиспользован;
-- перед принудительным завершением идентичность (PID + время создания)
-  перепроверена: `identity_rechecked=true`;
-- после остановки процесс исчез (0–2 с), окон на Desktop не осталось,
-  посторонних `X2.EXE` нет;
-- рабочий Altium: тот же PID/время создания, жив, ни одного окна/документа
-  теста; набор окон стабилен (диагностика `working_ui_stable=true` для всех
-  трёх циклов).
+## 4. Technical Limitations
 
-## 4. Ограничения и технические причины
+### 4.1 Graceful Shutdown
 
-### 4.1 Штатное завершение Altium недоступно
-
-`WM_CLOSE` всем top-level окнам скрытого экземпляра не завершает процесс:
-Altium показывает модальный WPF-диалог
+Sending `WM_CLOSE` to hidden top-level windows did not terminate Altium 24.4; it displayed a modal WPF dialog:
 
 ```
 Confirm Save Locally for (22) Modified Documents
 ```
 
-и ждёт ответа (в этапе 4 — `(25)`, `(3)`, `(25)` документов). `WM_SYSCOMMAND /
-SC_CLOSE` (то, что посылает Alt+F4) приводит к тому же диалогу. Диалог имеет
-класс `HwndWrapper[...]` (WPF), поэтому нажать кнопку через `BM_CLICK` нельзя, а
-эмуляция клавиатуры/`SendInput` требует активного Desktop и была бы небезопасна
-(можно случайно выбрать «Yes» и записать состояние пользователя).
+In stage 4, the dialog listed 25, 3, and 25 modified documents. `WM_SYSCOMMAND / SC_CLOSE` (Alt+F4) produced the same dialog. Its `HwndWrapper[...]` controls did not respond to `BM_CLICK`. Keyboard emulation/`SendInput` would require switching Desktop and risk confirming unwanted saves. IClient provides `IsQuitting` but no documented `Quit`; DelphiScript lacked `Windows.pas` functions.
 
-**Причина:** особенность Altium 24.4 — при выходе всегда предлагает сохранить
-локальные изменения; документированного `Quit` в IClient API нет (есть только
-`IsQuitting`), а функции `Windows.pas` в DelphiScript недоступны.
+The PoC waited 10 s, rechecked PID + creation time, and called `TerminateJobObject` for **only experiment-owned processes**. The resulting exit code **1** was reported explicitly.
 
-**Решение PoC:** после фиксированного ожидания (10 с) и повторной проверки
-PID + времени создания выполняется `TerminateJobObject` для Job Object, в
-который входят **только** процессы, созданные экспериментом. Процесс получает
-exit code 1; это зафиксировано в отчёте, а не замаскировано.
+For integration, the runner must either terminate its own Job Object or close all documents and handle any remaining dialog. Blind dialog confirmation is unsafe.
 
-**Следствие для интеграции:** batch runner должен либо использовать
-`TerminateJobObject` (принято в PoC), либо перед выходом закрывать все
-документы и всё равно обрабатывать диалог. Автоматическое подтверждение
-диалога без анализа его текста недопустимо.
+### 4.2 Licensing
 
-### 4.2 Лицензия
+Two simultaneous Altium instances from one installation were allowed on this machine. Single-seat licenses may block a second instance. The PoC detected candidate `#32770`/`HwndWrapper` dialogs containing `license`, `sign in`, or `activation`; it did not bypass them.
 
-Два одновременных экземпляра Altium 24.4 из одной установки запустились и
-работали; в этой конфигурации лицензия разрешала два слота. На машине с
-лицензией «один пользователь/одно место» второй экземпляр может упереться в
-лицензионный диалог. PoC детектирует такие диалоги (видимое окно класса
-`#32770`/`HwndWrapper` с ключевыми словами `license`, `sign in`, `activation`
-и т. п.), но не обходит их.
+### 4.3 Shared Profile
 
-### 4.3 Общий пользовательский профиль
+The hidden instance shared `%APPDATA%` and `%LOCALAPPDATA%`. `probe_profile.py` (PID **22688**) showed 167 files both before and after the run. Five existing service logs changed: `AltiumDesignerExtension.log`, `CEF_debug.log`, `DXP_Shutdown.log`, `DXP_SplashScreen.log`, and `DXP_Startup.log`. Installed Libraries, settings, and license files were unchanged. Forced termination prevented saving pending settings; behavior might differ between versions.
 
-Скрытый экземпляр использует тот же профиль `%APPDATA%`/`%LOCALAPPDATA%`.
-`probe_profile.py` (PID 22688) показал для запуска/останова:
+### 4.4 Other Limitations
 
-- файлов в снимке: 167 → 167 (ничего не добавлено/не удалено);
-- изменено 5 файлов, все — служебные логи:
-  `AltiumDesignerExtension.log`, `CEF_debug.log`, `DXP_Shutdown.log`,
-  `DXP_SplashScreen.log`, `DXP_Startup.log`.
+- Only an interactive `winsta0` session was tested, not a locked screen, disconnected/reconnected RDP, or another user session.
+- At most two persistent Altium instances were tested; temporary `-R` launchers exited within seconds.
+- Cold startup was 30–45 s, warm startup approximately 16 s; batch timeouts must account for startup.
+- PoC used neither production locks nor pending markers. Concurrent runs with production Spice Sifter are not recommended.
 
-Настройки, Installed Libraries и лицензионные файлы не изменялись. Однако
-принудительное завершение не даёт Altium сохранить накопленные настройки при
-выходе; при интеграции это скорее плюс (нет побочных записей), но поведение
-может зависеть от версии.
-
-### 4.4 Прочие ограничения
-
-- Скрытый Desktop создаётся в текущем интерактивном сеансе (`winsta0`). Работа
-  при заблокированном экране, после RDP-переподключения и в другом сеансе не
-  проверялась.
-- Проверялось максимум два одновременных экземпляра; третий (`-R`-launcher)
-  живёт секунды и завершается сам.
-- Время холодного старта — 30–45 с, тёплого (второй цикл) — 16 с. Это нужно
-  учитывать в таймаутах batch runner.
-- Эксперимент не использует production-lock/marker. Одновременный запуск с
-  обычным Spice Sifter не тестировался и не рекомендуется.
-
-## 5. Использованные команды
+## 5. Commands Used
 
 ```powershell
 cd experiments\hidden_altium
@@ -242,82 +156,55 @@ python probe_hidden_altium.py --seconds 150
 python probe_shutdown.py --wait 8
 python probe_profile.py --timeout 180
 
-# Контроль отсутствия посторонних процессов
+# Check for unrelated processes
 Get-Process X2 -ErrorAction SilentlyContinue | Select-Object Id,StartTime
 ```
 
-Диагностические сообщения и полные списки окон — в
-`artifacts/<stage>_<timestamp>/evidence.jsonl`; итоги — в `result.json` рядом.
-Скрипты, NSX и SDF скопированы в `altium_run/` (этап 3) и `cycleN/` (этап 4).
+Full diagnostic messages/window lists are in `artifacts/<stage>_<timestamp>/evidence.jsonl`, with `result.json` beside them. Scripts and generated NSX/SDF were copied into `altium_run/` (stage 3) and `cycleN/` (stage 4).
 
-## 6. Что не проверялось
+## 6. Not Tested
 
-- Совместная работа с **реальным** пользовательским Altium: его не было
-  запущено. Использовался идентичный эталонный экземпляр, запущенный
-  экспериментом; код подхвата уже работающего Altium только читает его
-  PID/окна и никогда не завершает.
-- Лицензионные диалоги, диалоги входа и восстановления документов: в данном
-  окружении не появлялись.
-- Длительная стабильность (часы) и десятки циклов: проверено 3 цикла, как
-  требует ТЗ.
-- Работа при заблокированном экране / RDP.
+- An actual user-owned working Altium session (an equivalent reference instance was used).
+- License, sign-in, or document-recovery dialogs, since they did not occur in this environment.
+- Long-duration operation or dozens of restart cycles; only three cycles were required and tested.
+- Locked screen and RDP scenarios.
 
-## 7. Вывод о возможности интеграции
+## 7. Integration Feasibility (Historical Plan)
 
-Интеграция технически возможна и не требует второй установки Altium, изменения
-глобальных настроек, `SwitchDesktop` или `taskkill`. Минимальные изменения
-(реализовывать отдельным заданием):
+Integration is feasible without a second Altium installation, changing global settings, using `SwitchDesktop`, or `taskkill`. The original plan was:
 
-1. **Новый модуль** `hidden_instance.py` — перенести из PoC
-   `hidden_session.py` (Desktop, запуск с `lpDesktop`, проверка PID+времени
-   создания, Job Object, перечисление окон, детект диалогов).
-2. **Точка запуска скрипта.** В `dblib_runner._launch` и
-   `spice_sifter.run_altium` добавить необязательный параметр `launcher`:
-   по умолчанию — текущий `subprocess.Popen` (поведение не меняется); в режиме
-   hidden — `CreateProcessW` с `lpDesktop` скрытого Desktop. Строка `-R` и
-   формат `ProcName` остаются прежними.
-3. **Режим CLI** `--altium-instance {current,hidden}` (по умолчанию `current`).
-   В hidden-режиме `require_running_altium` не должен требовать интерактивный
-   экземпляр: вместо него — проверка скрытого PID и готовности.
-4. **Batch runner** (отдельная задача): один скрытый экземпляр на пачку,
-   `START → READY → SCRIPT… → STOP` между пачками, таймаут холодного старта
-   не менее 90 с, завершение через Job Object.
-5. **Doctor**: добавить в отчёт поля `hidden_desktop.supported`,
-   `hidden_instance.state`, `license_two_instances_allowed` (последнее — по
-   факту успешного запуска, без обхода диалогов).
-6. **Тесты**: прогнать существующие acceptance-наборы в hidden-режиме и
-   проверять, что PID/окна рабочего Altium не изменились; отдельный тест на
-   адресность (nonce-документ появляется только на скрытом Desktop).
-7. **Не делать**: автоматическое подтверждение диалога выхода, глобальные
-   `taskkill`, `SwitchDesktop`, изменение Installed Libraries, переписывание
-   lock/marker без отдельного решения.
+1. Add `hidden_instance.py` based on PoC `hidden_session.py`: Desktop handling, `lpDesktop` launch, PID/creation-time identity, Job Object, window enumeration, and dialog detection.
+2. Add an optional launcher to `dblib_runner._launch` and `spice_sifter.run_altium`, using existing `subprocess.Popen` by default and hidden `CreateProcessW` when requested; preserve `-R` syntax and `ProcName`.
+3. Introduce `--altium-instance {current,hidden}`, defaulting to `current`; hidden mode should verify its own PID/readiness instead of requiring the user's Altium.
+4. Use one hidden instance per batch (`START → READY → SCRIPT… → STOP`) with a cold-start timeout of at least 90 s and Job Object termination.
+5. Extend doctor with `hidden_desktop.supported`, `hidden_instance.state`, and `license_two_instances_allowed`, only after actual success (never by bypassing license dialogs).
+6. Test existing acceptance scripts in hidden mode and verify that working PID/windows are unaffected; test targeted nonce-document delivery.
+7. Never auto-confirm dialogs, kill all X2.EXE processes, call `SwitchDesktop`, modify Installed Libraries, or rewrite locks/markers without approval.
 
-Оценка объёма: ~350–450 строк нового модуля, ~30–50 строк в точках запуска,
-флаг CLI и поля doctor; существующая логика генерации схем, SDF-парсинга и
-отчётов не затрагивается.
+Initial estimates: 350–450 lines for the module, 30–50 lines at launcher integration points, and CLI/doctor additions; no change to schematic generation, SDF parsing, or reports. **This proposal is historical; hidden-instance support was subsequently implemented in 0.7.0.**
 
-## Приложение A. Сводка PID
+## Appendix A — PID Summary
 
-| Прогон | Роль | PID | Время создания (UTC) |
+| Run | Role | PID | Creation time (UTC) |
 |---|---|---|---|
-| stage0 | тестовое окно PowerShell | 60424 | `17:30:49.627Z` |
-| stage1 | рабочий Altium | 16400 | `17:35:14.617Z` |
-| stage1 | скрытый Altium | 41420 | `17:35:49.113Z` |
-| stage2 | рабочий Altium | 45740 | `17:41:14.916Z` |
-| stage2 | скрытый Altium | 21696 | `17:41:51.477Z` |
-| stage2 | launcher (рабочий маршрут) | 33156 | `17:42:27.894Z` |
-| stage2 | launcher (скрытый маршрут) | 32260 | `17:42:45.058Z` |
-| stage3 | рабочий Altium | 41268 | `17:54:26.358Z` |
-| stage3 | скрытый Altium | 31932 | `17:55:01.843Z` |
-| stage3 | launcher | 49372 | `17:55:36.284Z` |
-| stage4 | рабочий Altium | 59480 | `18:38:20.754Z` |
-| stage4 | скрытый, цикл 1 | 31580 | `18:38:58.298Z` |
-| stage4 | скрытый, цикл 2 | 53060 | `18:39:59.795Z` |
-| stage4 | скрытый, цикл 3 | 45444 | `18:40:49.991Z` |
-| probe_shutdown | скрытый Altium | 25952 | `17:52:02.747Z` |
-| probe_profile | скрытый Altium | 22688 | `18:44:29.174Z` |
+| stage0 | PowerShell probe | 60424 | `17:30:49.627Z` |
+| stage1 | Working Altium | 16400 | `17:35:14.617Z` |
+| stage1 | Hidden Altium | 41420 | `17:35:49.113Z` |
+| stage2 | Working Altium | 45740 | `17:41:14.916Z` |
+| stage2 | Hidden Altium | 21696 | `17:41:51.477Z` |
+| stage2 | Launcher, working route | 33156 | `17:42:27.894Z` |
+| stage2 | Launcher, hidden route | 32260 | `17:42:45.058Z` |
+| stage3 | Working Altium | 41268 | `17:54:26.358Z` |
+| stage3 | Hidden Altium | 31932 | `17:55:01.843Z` |
+| stage3 | Launcher | 49372 | `17:55:36.284Z` |
+| stage4 | Working Altium | 59480 | `18:38:20.754Z` |
+| stage4 | Hidden, cycle 1 | 31580 | `18:38:58.298Z` |
+| stage4 | Hidden, cycle 2 | 53060 | `18:39:59.795Z` |
+| stage4 | Hidden, cycle 3 | 45444 | `18:40:49.991Z` |
+| probe_shutdown | Hidden Altium | 25952 | `17:52:02.747Z` |
+| probe_profile | Hidden Altium | 22688 | `18:44:29.174Z` |
 
-## Приложение B. Артефакты
+## Appendix B — Artifacts
 
 ```
 experiments/hidden_altium/artifacts/
@@ -330,8 +217,8 @@ experiments/hidden_altium/artifacts/
   probe_shutdown_20261116_175202_d5bda2/
   probe_profile_20261116_184429_f632d6/
 
-temp/dblib_runs/20261116_205536_dd7ac5/   (этап 3, production-каталог)
-temp/dblib_runs/20261116_213935_603c76/   (этап 4, цикл 1)
-temp/dblib_runs/20261116_214023_57d721/   (этап 4, цикл 2)
-temp/dblib_runs/20261116_214134_48572f/   (этап 4, цикл 3)
+temp/dblib_runs/20261116_205536_dd7ac5/   (stage 3, production folder)
+temp/dblib_runs/20261116_213935_603c76/   (stage 4, cycle 1)
+temp/dblib_runs/20261116_214023_57d721/   (stage 4, cycle 2)
+temp/dblib_runs/20261116_214134_48572f/   (stage 4, cycle 3)
 ```
