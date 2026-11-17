@@ -1,10 +1,8 @@
-# Контракт JSON-отчёта Spice Sifter 1.0
+# Spice Sifter JSON Report Contract 1.0
 
-Начиная с версии 0.6 каждый отчёт Spice Sifter содержит стабильную нормализованную коллекцию `results[]`. Это основной источник измерений для внешних агентов. Исторические `checks[]`, `measurements[]` и `runs[]` сохранены для обратной совместимости.
+Since 0.6, every report contains normalized `results[]`, the primary measurement source for external agents. Legacy `checks[]`, `measurements[]`, and `runs[]` are retained for backward compatibility. Machine-readable schema: [report.schema.json](../schemas/report.schema.json).
 
-Машиночитаемая схема: [`schemas/report.schema.json`](../schemas/report.schema.json).
-
-## Верхний уровень
+## Top-level Object
 
 ```json
 {
@@ -21,11 +19,11 @@
 }
 ```
 
-`schema_version` описывает контракт отчёта, а не версию Spice Sifter.
+`schema_version` identifies the **report contract**, not the application version.
 
 ## results[]
 
-Каждый элемент описывает один обязательный экземпляр проверки или измерения:
+Each entry corresponds to one required check or measurement instance:
 
 ```json
 {
@@ -43,44 +41,34 @@
 }
 ```
 
-Обязательные поля:
+Required fields:
 
-| Поле | Назначение |
+| Field | Description |
 |---|---|
-| `result_id` | Уникальный идентификатор результата в отчёте |
-| `run_id` | Запуск или `null` для семейного sweep-измерения |
-| `kind` | `check` или `measurement` |
-| `id` | Идентификатор исходной проверки/измерения; для проверки без `id` — индекс исходного массива |
-| `status` | `PASS`, `FAIL`, `MEASURED`, `ERROR` или `NOT_RUN` |
-| `value` | Число или `null` |
-| `unit` | Единица или `null` |
-| `error` | `{code, message}` или `null` |
+| `result_id` | Unique identifier within this report |
+| `run_id` | Run identifier or `null` for a sweep-family measurement |
+| `kind` | `check` or `measurement` |
+| `id` | Original check/measurement ID; if absent on checks, the source-array index |
+| `status` | `PASS`, `FAIL`, `MEASURED`, `ERROR`, or `NOT_RUN` |
+| `value` | Finite numeric result or `null` |
+| `unit` | Unit or `null` |
+| `error` | `{code, message}` or `null` |
 
-Необязательные поля: `limits`, `parameters`, `temperature_c`, `frequency_hz`, `signal`, `component`, `scope`, `run_ids`, `markers`.
+Optional fields: `limits`, `parameters`, `temperature_c`, `frequency_hz`, `signal`, `component`, `scope`, `run_ids`, and `markers`. Sweep-family measurements use `scope: "sweep"`, `run_id: null`, and `run_ids`; intermediate sweep points are not separate results.
 
-Для измерения, объединяющего семейство запусков Parameter Sweep, задаётся `scope: "sweep"`, `run_id: null` и `run_ids`. Промежуточные точки sweep не становятся отдельными результатами.
+## Statuses and Numeric Validation
 
-## Статусы
-
-| Статус | Значение |
+| Status | Meaning |
 |---|---|
-| `PASS` | Допуски заданы и пройдены |
-| `FAIL` | Допуски заданы и нарушены |
-| `MEASURED` | Значение получено, допуски не заданы; это **не** подтверждение datasheet |
-| `ERROR` | Достоверный результат получить нельзя |
-| `NOT_RUN` | Проверка/измерение не выполнялись; это **не** `PASS` |
+| `PASS` | Assertions present and limits satisfied |
+| `FAIL` | Assertions present but limits violated |
+| `MEASURED` | Value measured without limits; **not** datasheet compliance |
+| `ERROR` | No reliable result |
+| `NOT_RUN` | Check/measurement was not executed; **not** PASS |
 
-Для `PASS`, `FAIL` и `MEASURED` поле `value` обязано быть конечным числом:
+For PASS, FAIL, and MEASURED, `value` must be finite. Missing or `null` values yield `RESULT_VALUE_MISSING`; NaN, ±Infinity, strings, or booleans yield `RESULT_VALUE_INVALID`. Finite numbers, including zero, preserve their status and value.
 
-| Исходное значение | Результат |
-|---|---|
-| поле отсутствует | `ERROR / RESULT_VALUE_MISSING` |
-| `null` | `ERROR / RESULT_VALUE_MISSING` |
-| `NaN`, `Infinity`, `-Infinity` | `ERROR / RESULT_VALUE_INVALID` |
-| строка или boolean | `ERROR / RESULT_VALUE_INVALID` |
-| конечное число, включая `0` | статус сохраняется, значение не меняется |
-
-Пример недопустимого значения:
+Example invalid result:
 
 ```json
 {
@@ -93,7 +81,7 @@
 }
 ```
 
-`NaN` и `Infinity` никогда не попадают в финальный JSON. Для `ERROR` и `NOT_RUN` значение `null` допустимо. Итоговый статус отчёта пересчитывается после этой проверки.
+NaN and Infinity never appear as JSON numbers. `ERROR` and `NOT_RUN` may have null values. The overall status is recalculated after numeric validation.
 
 ## coverage
 
@@ -113,46 +101,34 @@
 }
 ```
 
-`expected` — число запланированных экземпляров проверок и измерений, а не число SPICE-запусков. Одна проверка на пяти температурах создаёт пять ожидаемых результатов.
+`expected` counts planned check/measurement instances, **not** SPICE runs. One check across five temperatures produces five expected results.
 
-Инварианты:
+Invariants:
 
 ```text
 expected  = completed + missing
 completed = passed + failed + measured + errors
 missing   = not_run
-len(results[]) = expected        # если планирование успешно
+len(results[]) = expected        # when planning succeeded
 ```
 
-Если план вычислить невозможно, возвращается `coverage.status = "UNKNOWN"`, `expected = null`, а диагностика находится в `coverage.diagnostics`.
+When the plan cannot be determined, `coverage.status = "UNKNOWN"`, `expected = null`, and explanations are recorded in `coverage.diagnostics`.
 
-## Итоговый статус
+## Overall Status
 
-Приоритет: `ERROR > FAIL > PASS`.
+Priority: **ERROR > FAIL > PASS**. ERROR applies if any required result is ERROR/NOT_RUN, coverage is incomplete, IDs are duplicated, an unplanned result exists, a simulation/run fails, or report integrity cannot be assured. FAIL means complete processing with no errors but at least one violated limit. PASS means all planned work completed without errors or failed limits.
 
-`ERROR`, если:
-
-- любой обязательный результат имеет `ERROR` или `NOT_RUN`;
-- покрытие неполное;
-- есть дубликаты `result_id` или незапланированные результаты;
-- произошла ошибка запуска/моделирования;
-- невозможно достоверно сформировать отчёт.
-
-`FAIL`, если все обязательные результаты обработаны, ошибок нет, но хотя бы одна проверка не прошла допуски.
-
-`PASS`, если все запланированные действия завершены, ошибок и нарушений допусков нет.
-
-Если проверок по допускам нет:
+If no tolerance assertions were defined:
 
 ```json
 {"validation_status": "NO_ASSERTIONS"}
 ```
 
-Успешная симуляция без проверок может иметь `status: "PASS"`, но не является подтверждённым соответствием характеристик.
+A simulation without assertions may have `status: "PASS"`, but that does not establish compliance with electrical specifications.
 
-## Примеры
+## Examples
 
-### Обычный PASS
+### PASS
 
 ```json
 {
@@ -168,7 +144,7 @@ len(results[]) = expected        # если планирование успеш�
 }
 ```
 
-### FAIL по допускам
+### Failed Assertion
 
 ```json
 {
@@ -180,7 +156,7 @@ len(results[]) = expected        # если планирование успеш�
 }
 ```
 
-### ERROR из-за потерянного результата
+### Missing Result
 
 ```json
 {
@@ -191,9 +167,9 @@ len(results[]) = expected        # если планирование успеш�
 }
 ```
 
-Потерянный результат присутствует в `results[]` со статусом `NOT_RUN`. Подстановка `PASS`, `0` или последнего значения запрещена.
+The missing result must appear in `results[]` as `NOT_RUN`. Never substitute PASS, zero, or a previous value.
 
-### Дубликат result_id
+### Duplicate result_id
 
 ```json
 {
@@ -203,7 +179,7 @@ len(results[]) = expected        # если планирование успеш�
 }
 ```
 
-### Семейное sweep-измерение
+### Sweep-family Measurement
 
 ```json
 {
@@ -220,13 +196,13 @@ len(results[]) = expected        # если планирование успеш�
 }
 ```
 
-## Где выполняется нормализация
+## Normalization
 
-Единственный нормализатор — `report_model.finalize_report()`. Он вызывается после `finish_measurements()` и агрегации Temperature/Sweep, поэтому одно измерение не попадает в `results[]` дважды. Отдельных нормализаторов для Standalone, Temperature, Sweep и DbLib нет.
+`report_model.finalize_report()` is the single normalizer. It is invoked after `finish_measurements()` and Temperature/Sweep aggregation, preventing duplicate measurements. Standalone, Temperature, Sweep, and DbLib modes do not have independent normalizers.
 
-## Совместимость
+## Compatibility
 
-- `checks[]`, `measurements[]`, `runs[]` сохраняются.
-- Входные JSON прежних версий поддерживаются.
-- Коды завершения: `PASS=0`, `FAIL=1`, `ERROR=2`.
-- Новые агенты должны читать `results[]` и `coverage`; старые могут продолжать читать исторические массивы.
+- Legacy `checks[]`, `measurements[]`, and `runs[]` are preserved.
+- Input JSON from earlier releases remains supported.
+- Exit codes: PASS=0, FAIL=1, ERROR=2.
+- New agents should use `results[]` and `coverage`; older agents may continue using the legacy arrays.
