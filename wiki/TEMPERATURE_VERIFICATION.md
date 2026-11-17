@@ -1,56 +1,56 @@
 # Spice Sifter 0.3 — Temperature Testing
 
-Отчёт этапа 0.3. Parameter Sweep и поддержка OP, добавленные в 0.4, описаны в [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md).
+Historical 0.3 report. Parameter Sweep and OP support were added in 0.4; see [SWEEP_VERIFICATION.md](SWEEP_VERIFICATION.md).
 
-## Среда и способ задания температуры
+## Environment and Temperature Handling
 
-Windows, Python 3.14.5, Altium Designer 24.4.1.13. Проверено 30 октября 2026 года на самостоятельных NSX через прежний DelphiScript Runner, без проектов, Dashboard Temperature Sweep и эмуляции ввода.
+Windows, Python 3.14.5, Altium Designer 24.4.1.13. Verified October 30, 2026 using standalone NSX files through the existing DelphiScript runner, without Altium projects, Dashboard Temperature Sweep, or input emulation.
 
-При прямой `.TEMP -40`, `.TEMP 25`, `.TEMP 85` контрольный диод дал одно и то же напряжение 0.6550993901096803 В. При замене на `.OPTIONS TEMP=<значение>` та же схема и модель дали ожидаемую температурную зависимость. Поэтому backend 24.4 использует разрешённую ТЗ альтернативу: внешний `.TEMP` или JSON-серия преобразуется в `.OPTIONS TEMP` рабочего NSX. Отчёт явно содержит temperature_method=OPTIONS TEMP. Исходные JSON, модели и TNOM не изменяются.
+Using `.TEMP -40`, `.TEMP 25`, or `.TEMP 85` directly produced the same 0.6550993901096803 V for the test diode. Replacing those directives with `.OPTIONS TEMP=<value>` produced the expected temperature dependence. Therefore, the 24.4 backend converts external `.TEMP` directives or JSON temperature series to `.OPTIONS TEMP` in the working NSX. The report explicitly records `temperature_method=OPTIONS TEMP`. Original JSON, models, and TNOM are unchanged.
 
-Это результат проверки конкретной версии и модели, а не правило, по которому одинаковые результаты произвольной модели объявляются ошибкой. TEMP_NOT_APPLIED автоматически по совпадению чисел не выставляется.
+This is an observation for the tested version and model, not a rule that identical values from arbitrary models indicate failure. `TEMP_NOT_APPLIED` is not emitted solely because values match.
 
-## Электрическое подтверждение
+## Electrical Verification
 
-Диод D(IS=1e-14 N=1), ток 1 мА, TNOM по умолчанию 27 °C:
+Diode `D(IS=1e-14 N=1)`, 1 mA current, default TNOM 27 °C:
 
-| Температура, °C | Напряжение, В |
+| Temperature, °C | Voltage, V |
 |---|---|
 | −40 | 0.7718678688455873 |
 | +25 | 0.658645844084736 |
 | +85 | 0.5508387135188227 |
 
-Пределы примера рассчитаны по диодному уравнению с температурным Is: Is(T)=Is(Tnom)·(T/Tnom)^3·exp[−Eg/k·(1/T−1/Tnom)], V=kT·ln(1+I/Is(T)), Eg=1.11 эВ. Допуск ±3 мВ покрывает отличие используемых физических констант и численные особенности симулятора. Все три проверки пройдены.
+Example limits use the diode equation with temperature-dependent Is: Is(T)=Is(Tnom)·(T/Tnom)^3·exp[−Eg/k·(1/T−1/Tnom)], V=kT·ln(1+I/Is(T)), Eg=1.11 eV. A ±3 mV tolerance covers physical-constant differences and simulator numerical behavior. All three checks passed.
 
-AC-резистор R=1 кОм, TC1=0.0039, неизменный TNOM=25 °C:
+AC resistor `R=1 kΩ`, `TC1=0.0039`, fixed `TNOM=25 °C`:
 
-| Температура, °C | Re(Z), Ом | Im(Z), Ом | Модуль, Ом |
+| Temperature, °C | Re(Z), Ω | Im(Z), Ω | Magnitude, Ω |
 |---|---|---|---|
 | −40 | 746.5 | 0 | 746.5 |
 | +25 | 1000 | 0 | 1000 |
 | +85 | 1234 | 0 | 1234 |
 
-Все компоненты проверены при 1 кГц. Результаты согласуются с R(T)=1000·[1+0.0039·(T−25)]. Напряжение и ток берутся из одного SDF одной температуры.
+All components were tested at 1 kHz. Results agree with R(T)=1000·[1+0.0039·(T−25)]. Voltage and current are taken from the same SDF at a given temperature.
 
-## Покрытие
+## Test Coverage
 
-Температурная приёмка: **9/9** сценариев. Автономные тесты: **43/43**, включая реальные SDF диода при трёх температурах. Проверены одиночный режим, серия, AC, полные и фильтрованные графики, неизменный делитель, ERROR/FAIL одной температуры и сбор графиков без проверок.
+Temperature acceptance: **9/9** scenarios. Standalone tests: **43/43**, including actual diode SDFs at three temperatures. Coverage includes single and series runs, AC, full/filtered graphs, unchanged divider behavior, per-temperature ERROR/FAIL, and collecting graphs without checks.
 
-Автономные тесты проверяют температурный синтаксис, дробные значения, комментарии, границу абсолютного нуля, NaN/Infinity, дубликаты, конфликты с OPTIONS TEMP, вложенные директивы, сохранность TNOM, отсутствующие ссылки проверок/графиков, последовательность запусков, продолжение после ошибки Runner, статусы FAIL/ERROR, фильтрацию графиков и отсутствие проверок.
+Standalone tests cover temperature syntax, fractional values, comments, absolute-zero boundaries, NaN/Infinity, duplicates, conflicts with OPTIONS TEMP, embedded directives, unchanged TNOM, missing check/graph references, run ordering, continuation after a runner error, FAIL/ERROR statuses, graph filtering, and the absence of checks.
 
-Реальная приёмка: `python tests/acceptance_temperature.py`. Её JSON-отчёт tests/temperature_acceptance_report.json сохраняется локально и исключён из Git. Для каждого запуска проверяются уникальный run_id, NSX с соответствующей OPTIONS TEMP и связь температурных графиков с runs.
+Live acceptance: `python tests/acceptance_temperature.py`. Its JSON report, `tests/temperature_acceptance_report.json`, remains local and is excluded from Git. Every run is checked for a unique `run_id`, corresponding OPTIONS TEMP in NSX, and links between temperature graphs and runs.
 
-Сценарий «ошибка одной температуры» в реальном Altium использует отсутствующий сигнал только при +25 °C: моделирование всех температур завершается, проверка одной температуры выдаёт ERROR, последующие результаты сохраняются. Отдельный автономный тест имитирует ошибку самого Runner и проверяет сохранение конкретного сообщения и продолжение серии. Altium намеренно не подвешивался.
+For the live "single temperature error" scenario, a missing signal is requested only at +25 °C: all temperature simulations complete, the +25 °C check reports ERROR, and subsequent results remain available. A separate standalone test mocks a runner failure and verifies that the original error message is retained and subsequent runs proceed. Altium was not intentionally hung.
 
-## Регрессия
+## Regression
 
-Без изменений выполнены прежние tests/acceptance.py — **7/7**, и tests/acceptance_ac.py — **11/11**. Проверены Transient/DC, прежние AC-модели, интерполяция, полные/ограниченные графики, отсутствие графиков без запроса, FAIL с графиками и ошибки. Все наборы завершились кодом 0.
+The original `tests/acceptance.py` passed **7/7**, and `tests/acceptance_ac.py` passed **11/11**, without changes. Transient/DC, previous AC models, interpolation, full/limited graphs, no graphs when not requested, FAIL with graphs, and errors were verified. Both suites exited with code 0.
 
-## Ограничения
+## Limitations
 
-- .OP не поддерживался в v0.2 и не заявляется в v0.3. Работают прежние Transient/DC/AC.
-- Глобальная рабочая температура не отменяет локальные переопределения и не создаёт температурную зависимость внутри макромоделей.
-- Поддержка .OPTIONS TEMP подтверждена на AD24.4.1.13; другие версии не проверены.
-- После тайм-аута небезопасные последующие запуски блокирует pending-run.txt. Процесс пользователя не завершается.
-- Температурные графики находятся в runs[i].graphs и содержат temperature_c; графики разных температур не объединяются.
-- Ошибки входа возвращают INPUT_INVALID с temperature_code; ошибки Runner сохраняют исходные код и сообщение.
+- `.OP` was not supported in v0.2 and is not claimed for v0.3; existing Transient/DC/AC modes work.
+- Global operating temperature neither overrides local model values nor creates temperature dependence inside macromodels.
+- `.OPTIONS TEMP` was confirmed on AD24.4.1.13; other versions were not tested.
+- After a timeout, `pending-run.txt` blocks unsafe subsequent runs. The user's process is not terminated.
+- Temperature graphs appear under `runs[i].graphs` and include `temperature_c`; graphs from different temperatures are not merged.
+- Input errors return `INPUT_INVALID` with `temperature_code`; runner errors retain their original code and message.
