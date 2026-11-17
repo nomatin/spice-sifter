@@ -1,51 +1,51 @@
 # Spice Sifter 0.2 — AC Analysis & Graph Export
 
-Отчёт этапа 0.2. Температурное расширение и актуальная регрессия — в [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md).
+Historical 0.2 report. For temperature extensions and more recent regression results, see [TEMPERATURE_VERIFICATION.md](TEMPERATURE_VERIFICATION.md).
 
-## Совместимость и формат SDF
+## Compatibility and SDF Format
 
-Расширена существующая утилита spice_sifter.py. CLI, временный DelphiScript и схема сохранения результатов остались прежними. Новые поля необязательны. Проверки без analysis по-прежнему используют Transient.
+The existing `spice_sifter.py` utility was extended without replacing its CLI, temporary DelphiScript, or result-saving workflow. New fields are optional; checks without `analysis` still use transient analysis.
 
-Комплексная структура проверена на реальном SDF Altium Designer 24.4.1.13: для комплексных X/Y каждая точка содержит float64 Re(X), Im(X), Re(Y), Im(Y), затем соответствующий вспомогательный блок float32. Парсер вычисляет размеры по признакам комплексности и числу точек, проверяет границы и TotalPoints. Частота хранится с исходными числовыми значениями; её мнимая часть должна быть нулевой. Реальный образец RC включён в tests/fixtures/rc_ac_ad24_4.sdf.
+The complex-data structure was verified against a real SDF from Altium Designer 24.4.1.13. For complex X/Y, each sample contains float64 Re(X), Im(X), Re(Y), Im(Y), followed by the corresponding auxiliary float32 block. The parser derives block sizes from complex flags and sample counts, and validates boundaries and `TotalPoints`. Original frequency values are preserved; the imaginary part of frequency must be zero. A real RC fixture is included as `tests/fixtures/rc_ac_ad24_4.sdf`.
 
-В SDF имя тока источника VSENSE — i(vsense). Для VSENSE src dut 0 ток направлен от источника к DUT; current_sign=1. Изменение current_sign явно меняет знак импеданса, автоматической подгонки нет.
+The VSENSE source current is called `i(vsense)` in SDF. For `VSENSE src dut 0`, current flows from the source to the DUT and `current_sign=1`. Changing `current_sign` explicitly reverses the impedance sign; no automatic correction is applied.
 
-## Результаты реальных испытаний
+## Real Simulation Results
 
-Среда: Windows, Altium Designer 24.4.1.13, Python 3.14.5; 30 октября 2026 года.
+**Environment:** Windows, Altium Designer 24.4.1.13, Python 3.14.5; October 30, 2026.
 
-| Проверка | Итог |
+| Test | Result |
 |---|---|
-| Резистор 1 кОм, DEC | Re(Z)=1000 Ом, Im(Z)=0, модуль 1000 Ом; PASS |
-| Конденсатор 1 мкФ, OCT | Отрицательная Im(Z), модуль убывает; аналитические допуски пройдены |
-| Индуктивность 1 мГн, LIN | При 1 кГц Im(Z)=6.283185307179587 Ом; PASS |
-| Последовательная RC, DEC | При 1 кГц Z≈1000−j159.1549430918962 Ом; PASS |
-| Произвольная частота 1011 Гц | Интерполяция исходных V/I; PASS |
-| Частота за диапазоном | ERROR / AC_FREQUENCY_OUT_OF_RANGE |
-| Полные графики | 501 из 501 точек, напряжение и импеданс |
-| max_points=100 | 100 из 501 точек, крайние точки сохранены |
-| FAIL с запросом графиков | FAIL, массивы возвращены |
-| AC без output.graphs | Поле graphs отсутствует |
-| Transient/DC signal | Массивы с единицами s/V и V/V; PASS |
+| 1 kΩ resistor, DEC | Re(Z)=1000 Ω, Im(Z)=0, magnitude 1000 Ω; PASS |
+| 1 µF capacitor, OCT | Negative Im(Z), decreasing magnitude; analytical tolerances passed |
+| 1 mH inductor, LIN | Im(Z)=6.283185307179587 Ω at 1 kHz; PASS |
+| Series RC, DEC | Z≈1000−j159.1549430918962 Ω at 1 kHz; PASS |
+| Arbitrary frequency 1011 Hz | Interpolation of original V/I; PASS |
+| Out-of-range frequency | ERROR / AC_FREQUENCY_OUT_OF_RANGE |
+| Full graph arrays | All 501 voltage and impedance points |
+| `max_points=100` | 100 of 501 points, endpoints preserved |
+| FAIL with graph request | FAIL; arrays still returned |
+| AC without `output.graphs` | No `graphs` field |
+| Transient/DC signal | Arrays with s/V and V/V units; PASS |
 
-Приёмка AC: 11/11 сценариев. Машиночитаемый локальный отчёт — tests/ac_acceptance_report.json; повторить: `python tests/acceptance_ac.py` при открытом Altium. Отчёт исключён из Git как локальный результат с путями артефактов.
+AC acceptance: **11/11** scenarios. The machine-readable local report, `tests/ac_acceptance_report.json`, is excluded from Git because it includes local artifact paths. Reproduce with `python tests/acceptance_ac.py` while Altium is running.
 
-Идеальная индуктивность с идеальным источником напряжения образовывала вырожденную цепь постоянного тока. В примере введён RDRV=1 Ом между источником и VSENSE, вне измеряемого DUT. Измеряемое отношение V(dut)/I(VSENSE) по-прежнему относится только к идеальной индуктивности.
+An ideal inductor connected to an ideal voltage source caused a degenerate DC circuit. The test adds `RDRV=1 Ω` between the source and VSENSE, outside the measured DUT. The measured V(dut)/I(VSENSE) ratio still applies only to the ideal inductor.
 
-## Регрессия MVP 1
+## MVP 1 Regression
 
-Прежний tests/acceptance.py выполнен без изменений: 7/7 сценариев пройдены (делитель, неверный диапазон, отсутствующий сигнал, неверный JSON, повторный запуск, ошибочная модель, кириллица и пробелы). Отчёт — tests/acceptance_report.json.
+The original `tests/acceptance.py` was run unchanged: **7/7** passed (divider, wrong tolerance, missing signal, invalid JSON, repeated run, faulty model, Cyrillic characters/spaces). Report: `tests/acceptance_report.json`.
 
-## Автоматические проверки
+## Automated Tests
 
-31 тест: прежние 18 без изменения требований плюс 13 AC-тестов. Проверяются реальные и синтетические комплексные данные, аналитическое RC-значение, раздельная интерполяция V/I до деления, точный поиск частоты, current_sign, несовпадение и нарушение порядка сеток, нулевые/малые токи, NaN, отсутствующие и неоднозначные Chart/Wave, входные параметры, графики AC/Transient/DC, полные и сокращённые массивы. Отдельный тест со значением между крайними точками подтверждает, что сокращение графика не изменяет проверки допусков.
+**31 tests:** the original 18 with unchanged assertions, plus 13 AC tests. Coverage includes real and synthetic complex data, analytical RC results, separate interpolation of V and I before division, exact frequency matching, `current_sign`, mismatched/unordered grids, zero/low current, NaN, missing/ambiguous Chart/Wave, input validation, AC/Transient/DC graphs, and full/decimated arrays. A case with a value between selected graph points confirms that decimation cannot affect tolerance checks.
 
-Команда: `python -m unittest discover -s tests -v`.
+Run: `python -m unittest discover -s tests -v`.
 
-## Ограничения
+## Limitations
 
-- Интерполяция линейная по герцам и приближённая; сетка должна разрешать резонансы. Равномерное сокращение графика может скрыть узкие пики.
-- max_points должен быть >=2, чтобы сохранить оба края. Без ограничения экспортируются все точки.
-- Сетки V/I должны совпадать; автоматического совмещения нет. Несколько подходящих анализов отклоняются как неоднозначные, а не выбираются произвольно.
-- .OP не был реализован в MVP 1 и не добавлен в 0.2. Регрессия .OP не заявляется. DC теперь поддерживается для обычных измерений и экспорта сигналов.
-- Сохраняются ограничения исходной версии по доступу к сообщениям панели MixedSim и кириллическим путям моделей (см. README).
+- Frequency interpolation is linear in hertz and approximate; the frequency grid must resolve resonances. Uniform graph decimation can hide narrow peaks.
+- `max_points` must be at least 2 to retain both endpoints. Without a limit, every point is exported.
+- V/I grids must match; there is no automatic alignment. Multiple matching analyses are rejected as ambiguous.
+- `.OP` was neither part of MVP 1 nor added in 0.2; no OP regression is claimed. DC is now supported for basic measurements and signal exports.
+- Limitations on MixedSim panel messages and Cyrillic model paths still apply; see the [User Guide](User-Guide.md).
