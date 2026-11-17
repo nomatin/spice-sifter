@@ -1,6 +1,6 @@
-# Интеграция с пакетными агентами
+# Batch Agent Integration
 
-Spice Sifter остаётся одиночным CLI-инструментом. Пакетный агент (например, агент, добавляющий компоненты в библиотеку) обязан выполнить **одну общую проверку готовности** перед серией испытаний. Готовый эталонный модуль — [`batch_agent.py`](../batch_agent.py).
+Spice Sifter remains a single-test CLI tool. Before a test series, a batch agent (such as one maintaining an Altium component library) must perform **one shared readiness check**. The reference implementation is [`batch_agent.py`](../batch_agent.py).
 
 ## Preflight
 
@@ -8,7 +8,7 @@ Spice Sifter остаётся одиночным CLI-инструментом. �
 python spice_sifter.py doctor --json
 ```
 
-Пример ответа:
+Example response:
 
 ```json
 {
@@ -31,14 +31,14 @@ python spice_sifter.py doctor --json
 }
 ```
 
-Статусы:
+Possible statuses:
 
-- `READY` — можно запускать серию. Требуются Altium 24.4.x и подтверждённая отзывчивость (`responding = true`).
-- `BUSY` — Altium не отвечает, занят другой запуск или активна предыдущая симуляция.
-- `RECOVERY_REQUIRED` — есть завершённый/устаревший/неопределённый `pending-run`; сначала выполните `recover`.
-- `ERROR` — нет X2.EXE, Altium не запущен, версия неизвестна или не поддерживается, `responding = null`, обнаружено несколько неоднозначных экземпляров, недоступна временная директория или ресурсы DbLib.
+- `READY` — tests can run. For current mode, Altium 24.4.x must be confirmed responsive (`responding = true`).
+- `BUSY` — Altium does not respond, another test has the lock, or a prior simulation is active.
+- `RECOVERY_REQUIRED` — a completed, stale, or indeterminate `pending-run` marker requires `recover`.
+- `ERROR` — missing X2.EXE, Altium not running in current mode, unknown/unsupported version, `responding = null`, ambiguous instances, inaccessible temporary folder, or missing DbLib resources.
 
-Агент должен прекратить **всю** серию, если `ready != true`:
+If `ready != true`, the agent must stop the **entire** batch:
 
 ```text
 Agent
@@ -46,13 +46,13 @@ Agent
 doctor --json
   ↓
 READY?
-  ├── YES → выполнять тесты
-  └── NO  → пометить все испытания NOT_RUN и остановиться
+  ├── YES → run tests
+  └── NO  → mark all tests NOT_RUN and stop
 ```
 
-`doctor` не запускает электрическое моделирование. Он проверяет только доступные признаки: наличие файла, версию, процесс, отзывчивость, блокировку, маркер и временную директорию. Если блокирующий диалог Altium нельзя обнаружить надёжно, `doctor` не заявляет, что его отсутствие проверено.
+`doctor` does not run electrical simulations. It checks available evidence: executable, version, process, responsiveness, lock, marker, and temporary directory. When a blocking Altium dialog cannot be reliably detected, doctor does not claim it has verified the absence of dialogs.
 
-## Эталонный пакетный запуск
+## Reference Batch Execution
 
 ```python
 from batch_agent import run_batch
@@ -66,10 +66,9 @@ result = run_batch(
 )
 ```
 
-По умолчанию (`altium_instance="current"`) агент не запускает Altium: нужен
-заранее открытый и отзывчивый экземпляр, как раньше.
+By default, `altium_instance="current"` uses an already-running responsive Altium instance; the agent does not start it.
 
-### Скрытый режим пачки
+### Hidden Batch Mode
 
 ```python
 result = run_batch(
@@ -80,25 +79,18 @@ result = run_batch(
 )
 ```
 
-или из командной строки:
+CLI alternative:
 
 ```powershell
 python batch_agent.py temp/inputs/r0009.json temp/inputs/r0020.json `
   --altium-instance hidden --timeout 180 --ready-timeout 120
 ```
 
-Последовательность: `BATCH START → doctor(hidden) → START → READY → Test 1..N →
-STOP`. Один экземпляр обслуживает всю серию; повторный вызов создаёт новый.
-Завершение выполняется в `finally`, уже полученные отчёты сохраняются.
-`result.altium_session` содержит Desktop, PID, время создания, время READY,
-запущенные команды и причину завершения; на JSON-контракт `results[]` это не
-влияет.
+Lifecycle: `BATCH START → doctor(hidden) → START → READY → Test 1..N → STOP`. One hidden instance serves the entire batch; a new call creates a new instance. Termination is handled in `finally` and completed reports are preserved. `result.altium_session` contains Desktop, PID, creation time, ready time, executed commands, and termination reason. This does not change the `results[]` JSON report contract.
 
-Скрытый режим не ищет и не выбирает уже работающий `X2.EXE`: идентификатор —
-только собственный PID + время создания. Наличие нескольких экземпляров Altium
-не переводит такой сеанс в `AMBIGUOUS`.
+Hidden mode does **not** discover or select an already-running X2.EXE. Identity is based exclusively on its own PID and creation time. Other concurrent Altium instances do not make the hidden session `AMBIGUOUS`.
 
-При недоступном Altium:
+When Altium is unavailable:
 
 ```json
 {
@@ -113,33 +105,26 @@ STOP`. Один экземпляр обслуживает всю серию; п�
 }
 ```
 
-Ни один тест не запускается, MixedSim не вызывается, ложные измерения не создаются.
+No tests are launched, MixedSim is not called, and no fabricated measurements are produced.
 
-## Проверка отчёта перед принятием
+## Validating a Report Before Accepting It
 
-`batch_agent.run_batch()` не доверяет полю `status`. Перед принятием результата он проверяет:
+`batch_agent.run_batch()` never blindly trusts `status`. It validates:
 
-- `schema_version == "1.0"`;
-- `status` ∈ `PASS`/`FAIL`/`ERROR`;
-- `validation_status` ∈ `ASSERTIONS`/`NO_ASSERTIONS`;
-- наличие `results[]` и `coverage`;
-- `coverage.status == "OK"`;
-- неотрицательные счётчики и инварианты `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`;
-- `coverage.expected == coverage.completed`, `missing == 0`, `not_run == 0`;
-- `len(results) == coverage.expected`;
-- уникальность `result_id`;
-- обязательные поля каждого результата: `result_id`, `run_id`, `kind`, `id`, `status`, `value`, `unit`, `error`;
-- `kind` ∈ `check`/`measurement`, `id` — строка или целое число;
-- конечное числовое `value` для `PASS`/`FAIL`/`MEASURED`;
-- `error = null` для `PASS`/`FAIL`/`MEASURED`, объект с `code` и `message` для `ERROR`;
-- `value = null` для `NOT_RUN`;
-- соответствие счётчиков `coverage` фактическим статусам `results[]`;
-- `PASS` без `FAIL`/`ERROR`/`NOT_RUN`, `FAIL` без `ERROR`/`NOT_RUN` и хотя бы с одним `FAIL`;
-- `error` верхнего уровня: `null` для `PASS`/`FAIL`, объект для `ERROR`.
+- `schema_version == "1.0"`, allowed status (`PASS`/`FAIL`/`ERROR`), and allowed `validation_status` (`ASSERTIONS`/`NO_ASSERTIONS`).
+- Presence of `results[]` and `coverage` with `coverage.status == "OK"`.
+- Nonnegative counters and invariants `expected = completed + missing`, `completed = passed + failed + measured + errors`, `missing = not_run`.
+- Full completion: `coverage.expected == coverage.completed`, `missing == 0`, `not_run == 0`, and `len(results) == coverage.expected`.
+- Unique `result_id` and all required result fields: `result_id`, `run_id`, `kind`, `id`, `status`, `value`, `unit`, `error`.
+- `kind` is `check`/`measurement`; `id` is a string or integer.
+- Finite numeric `value` and null `error` for PASS/FAIL/MEASURED; error object containing code and message for ERROR; `value = null` for NOT_RUN.
+- Coverage counters match actual result statuses.
+- PASS has no FAIL/ERROR/NOT_RUN; FAIL has at least one FAIL and no ERROR/NOT_RUN.
+- Top-level `error` is null on PASS/FAIL and an object on ERROR.
 
-`REPORT_CONTRACT_INVALID` возвращается при структурных нарушениях и противоречиях статусов, `REPORT_INCOMPLETE` — при потере результатов или неполном coverage. Для `ERROR` допускается ошибка выполнения при полностью сформированном coverage.
+`REPORT_CONTRACT_INVALID` signals structural/status contradictions; `REPORT_INCOMPLETE` means missing results or incomplete coverage. An execution ERROR may still have complete coverage.
 
-Неполный отчёт не может дать `PASS`:
+An incomplete report **cannot** become PASS:
 
 ```json
 {
@@ -159,35 +144,21 @@ STOP`. Один экземпляр обслуживает всю серию; п�
 }
 ```
 
-Структурные нарушения и несовместимая версия дают `REPORT_CONTRACT_INVALID`. Оригинальный отчёт сохраняется в `error.diagnostics.report`. Автоматическое заполнение пропущенных значений не выполняется.
+An incompatible schema or structurally invalid result returns `REPORT_CONTRACT_INVALID`. The original report is stored at `error.diagnostics.report`. Missing values are never filled in automatically.
 
-## Ошибки в середине серии
+## System Errors During a Batch
 
-Если первый или последующий тест вернул один из системных кодов:
+If any test returns a systemic error, the remaining series is aborted. Systemic codes include:
 
-- `BUSY`
-- `TIMEOUT`
-- `SCRIPT_NOT_EXECUTED`
-- `ALTIUM_NOT_RUNNING`
-- `ALTIUM_STATE_UNKNOWN`
-- `ALTIUM_PENDING_RUN`
-- `HIDDEN_DESKTOP_UNAVAILABLE`
-- `HIDDEN_LAUNCH_FAILED`
-- `HIDDEN_READY_TIMEOUT`
-- `HIDDEN_BLOCKING_DIALOG`
-- `HIDDEN_PROCESS_LOST`
-- `HIDDEN_SCRIPT_NOT_ROUTED`
-- `HIDDEN_SCRIPT_TIMEOUT`
-- `HIDDEN_STATE_AMBIGUOUS`
-- `HIDDEN_STOP_FAILED`
+`BUSY`, `TIMEOUT`, `SCRIPT_NOT_EXECUTED`, `ALTIUM_NOT_RUNNING`, `ALTIUM_STATE_UNKNOWN`, `ALTIUM_PENDING_RUN`, `HIDDEN_DESKTOP_UNAVAILABLE`, `HIDDEN_LAUNCH_FAILED`, `HIDDEN_READY_TIMEOUT`, `HIDDEN_BLOCKING_DIALOG`, `HIDDEN_PROCESS_LOST`, `HIDDEN_SCRIPT_NOT_ROUTED`, `HIDDEN_SCRIPT_TIMEOUT`, `HIDDEN_STATE_AMBIGUOUS`, and `HIDDEN_STOP_FAILED`.
 
-агент останавливает оставшуюся серию. Уже завершённые отчёты сохраняются, остальные помечаются `NOT_RUN`. `batch_agent.run_batch()` делает это автоматически.
+Completed reports are retained, while unstarted tests are marked `NOT_RUN`. The reference `batch_agent.run_batch()` handles this automatically.
 
-Каждый отдельный запуск Spice Sifter всё равно берёт собственную межпроцессную блокировку: состояние Altium может измениться после preflight. Пачка в hidden-режиме удерживает ту же блокировку на всё время серии; вложенный запуск скрипта внутри процесса не блокируется повторно, а независимый второй запуск Spice Sifter — блокируется.
+Each Spice Sifter invocation still acquires the interprocess lock because Altium state may change after preflight. Hidden batches hold that lock for the entire series. Nested acquisitions within the same owning thread are allowed; independent concurrent Spice Sifter runs are blocked.
 
-## Диагностика зависшего запуска
+## Diagnosing an Unfinished Run
 
-Вместо короткого `BUSY` возвращается структурированная ошибка:
+Rather than an uninformative BUSY response, an unresolved run returns structured diagnostics:
 
 ```json
 {
@@ -218,27 +189,27 @@ STOP`. Один экземпляр обслуживает всю серию; п�
 }
 ```
 
-## Восстановление
+## Recovery
 
 ```powershell
 python spice_sifter.py recover
 python spice_sifter.py recover --confirm-legacy-stopped
 ```
 
-| Состояние маркера | Действие |
+| Marker state | Action |
 |---|---|
-| Предыдущий запуск завершён (`STATUS=OK/ERROR`, в том числе в `collect.tmp`/`status.tmp`) | Маркер удаляется |
-| Процесс Altium завершился или PID переиспользован | Устаревший маркер удаляется |
-| Старый маркер с путём, директория отсутствует | Устаревший маркер удаляется |
-| Старый маркер с путём, директория есть, финального статуса нет, процессы `X2.EXE` отсутствуют | Маркер удаляется после проверки всех процессов |
-| Старый маркер с путём, Altium запущен или состояние процессов неизвестно | Отказ, маркер сохраняется |
-| Запуск ещё выполняется | `REFUSED`, маркер сохраняется |
-| Состояние неопределённо | `UNKNOWN`, маркер сохраняется, выдаются инструкции |
-| Маркер повреждён | `UNKNOWN`, диагностика, маркер сохраняется |
+| Previous run completed (`STATUS=OK/ERROR`, including `collect.tmp`/`status.tmp`) | Remove marker |
+| Altium exited or PID was reused | Remove stale marker |
+| Legacy path-only marker with missing directory | Remove stale marker |
+| Legacy marker with existing directory, no final status, and no `X2.EXE` processes | Remove after checking all processes |
+| Legacy marker with running Altium or unknown process state | Refuse; preserve marker |
+| Run still active | `REFUSED`; preserve marker |
+| Indeterminate state | `UNKNOWN`; preserve marker and provide instructions |
+| Corrupt marker | `UNKNOWN`; preserve marker with diagnostics |
 
-`--confirm-legacy-stopped` — явное подтверждение для старого маркера. Оно **не обходит** проверку процессов: если `X2.EXE` запущен или его состояние нельзя установить, восстановление отклоняется.
+`--confirm-legacy-stopped` explicitly acknowledges an old-format marker; it **does not bypass** process checks. If X2.EXE is running or its state is unknowable, recovery is refused.
 
-Успешное восстановление:
+Example of successful recovery:
 
 ```json
 {
@@ -252,7 +223,7 @@ python spice_sifter.py recover --confirm-legacy-stopped
 }
 ```
 
-Отказ при активной симуляции:
+Refusal when a simulation remains active:
 
 ```json
 {
@@ -266,7 +237,7 @@ python spice_sifter.py recover --confirm-legacy-stopped
 }
 ```
 
-Неопределённое состояние (Altium жив, таймаут истёк, финального статуса нет):
+Unknown state (Altium alive, timeout expired, no final status):
 
 ```json
 {
@@ -276,18 +247,16 @@ python spice_sifter.py recover --confirm-legacy-stopped
 }
 ```
 
-Возраст маркера сам по себе не является основанием для удаления. Небезопасного `recover --force` нет.
+Marker age alone is never a reason to remove it; there is no unsafe `recover --force`.
 
-## Рекомендуемый порядок
+## Recommended Procedure
 
-1. `python spice_sifter.py doctor --json`
-2. Если `RECOVERY_REQUIRED` — `python spice_sifter.py recover`, затем снова `doctor --json`.
-3. Запустить серию.
-4. При системной ошибке остановить серию, сохранить завершённые отчёты, остальные пометить `NOT_RUN`.
-5. Читать `results[]` и `coverage`, а не вычислять ожидаемое число измерений по косвенным признакам.
+1. Run `python spice_sifter.py doctor --json`.
+2. If `RECOVERY_REQUIRED`, use `python spice_sifter.py recover`, then repeat doctor.
+3. Start the batch.
+4. On a systemic failure, stop, keep completed reports, and mark remaining tests `NOT_RUN`.
+5. Consume `results[]` and `coverage` rather than inferring expected measurements indirectly.
 
-Для автоматических пачек рекомендуемый режим — `hidden`; в нём preflight
-выполняется как `python spice_sifter.py doctor --altium-instance hidden --json`,
-а запущенный рабочий Altium не требуется.
+For automated batches, `hidden` is recommended. Its preflight uses `python spice_sifter.py doctor --altium-instance hidden --json` and does not require a working Altium instance to be open.
 
-Контракт отчёта: [REPORT_CONTRACT.md](REPORT_CONTRACT.md).
+See the [JSON Report Contract](REPORT_CONTRACT.md) and [Hidden Altium Instance](HIDDEN_ALTIUM.md).
